@@ -11,6 +11,7 @@ import { Product } from '@/types/database';
 interface PriceUpdate {
   price_super_gros?: number;
   price_gros?: number;
+  price_invoice_official?: number;
   price_invoice?: number;
   price_retail?: number;
   price_no_invoice?: number;
@@ -153,7 +154,7 @@ const GroupPriceUpdateDialog: React.FC<GroupPriceUpdateDialogProps> = ({
                       disabled={product.id === currentProduct.id}
                     />
                     <Package className="w-4 h-4 text-muted-foreground" />
-                    <span className="flex-1">{product.name}</span>
+                    <span className="flex-1">{(product as any).app_name || product.name}</span>
                     {product.id === currentProduct.id && (
                       <span className="text-xs text-primary">(الحالي)</span>
                     )}

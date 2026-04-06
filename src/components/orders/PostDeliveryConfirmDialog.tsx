@@ -13,7 +13,7 @@ interface ProductChange {
   original_quantity: number;
   new_quantity: number;
   unit_price: number;
-  difference: number; // positive = increase, negative = decrease
+  difference: number;
 }
 
 interface PostDeliveryConfirmDialogProps {
@@ -30,10 +30,18 @@ interface PostDeliveryConfirmDialogProps {
 }
 
 const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
-  open, onOpenChange, changes, originalTotal, newTotal, onConfirm, isSubmitting,
-  customerHasDebt, customerDebtAmount = 0, customerCreditBalance = 0,
+  open,
+  onOpenChange,
+  changes,
+  originalTotal,
+  newTotal,
+  onConfirm,
+  isSubmitting,
+  customerHasDebt,
+  customerDebtAmount = 0,
+  customerCreditBalance = 0,
 }) => {
-  const { t, dir } = useLanguage();
+  const { dir } = useLanguage();
   const [paymentType, setPaymentType] = useState<'full' | 'partial' | 'no_payment'>('full');
   const [partialAmount, setPartialAmount] = useState('');
 
@@ -42,9 +50,9 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
   const isDecrease = totalDifference < 0;
   const absDifference = Math.abs(totalDifference);
 
-  const productChanges = changes.filter(c => c.difference !== 0);
-  const increases = productChanges.filter(c => c.difference > 0);
-  const decreases = productChanges.filter(c => c.difference < 0);
+  const productChanges = changes.filter((change) => change.difference !== 0);
+  const increases = productChanges.filter((change) => change.difference > 0);
+  const decreases = productChanges.filter((change) => change.difference < 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -58,7 +66,6 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
 
         <ScrollArea className="max-h-[calc(90vh-10rem)] px-4 py-3">
           <div className="space-y-4">
-            {/* Product Movements */}
             <div className="space-y-2">
               <h3 className="text-sm font-bold flex items-center gap-2">
                 <Package className="w-4 h-4" />
@@ -71,11 +78,11 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
                     <ArrowDown className="w-3 h-3" />
                     سحب من المخزن
                   </p>
-                  {increases.map((c, i) => (
-                    <div key={i} className="flex justify-between text-sm">
-                      <span>{c.product_name}</span>
+                  {increases.map((change, index) => (
+                    <div key={`${change.product_name}-${index}`} className="flex justify-between text-sm">
+                      <span>{change.product_name}</span>
                       <Badge variant="destructive" className="text-xs">
-                        +{c.difference} صندوق
+                        +{change.difference} صندوق
                       </Badge>
                     </div>
                   ))}
@@ -88,11 +95,11 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
                     <ArrowUp className="w-3 h-3" />
                     إرجاع إلى المخزن
                   </p>
-                  {decreases.map((c, i) => (
-                    <div key={i} className="flex justify-between text-sm">
-                      <span>{c.product_name}</span>
+                  {decreases.map((change, index) => (
+                    <div key={`${change.product_name}-${index}`} className="flex justify-between text-sm">
+                      <span>{change.product_name}</span>
                       <Badge className="bg-green-100 text-green-800 text-xs">
-                        {Math.abs(c.difference)} صندوق
+                        {Math.abs(change.difference)} صندوق
                       </Badge>
                     </div>
                   ))}
@@ -100,7 +107,6 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
               )}
             </div>
 
-            {/* Financial Impact */}
             <div className="space-y-2">
               <h3 className="text-sm font-bold flex items-center gap-2">
                 <DollarSign className="w-4 h-4" />
@@ -126,28 +132,31 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
 
               {isIncrease && (
                 <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 text-sm text-amber-800">
-                  <p className="font-bold mb-1">💰 العميل مطالب بدفع {absDifference.toLocaleString()} دج إضافية</p>
+                  <p className="font-bold mb-1">العميل مطالب بدفع {absDifference.toLocaleString()} دج إضافية</p>
                   {customerCreditBalance > 0 && (
-                    <p className="text-xs mt-1">💳 لدى العميل رصيد فائض: {customerCreditBalance.toLocaleString()} دج (سيتم خصمه تلقائياً)</p>
+                    <p className="text-xs mt-1">
+                      لدى العميل رصيد فائض: {customerCreditBalance.toLocaleString()} دج وسيتم خصمه تلقائياً
+                    </p>
                   )}
                 </div>
               )}
 
               {isDecrease && (
                 <div className="border border-blue-200 bg-blue-50 rounded-lg p-3 text-sm text-blue-800">
-                  <p className="font-bold mb-1">💸 فارق لصالح العميل: {absDifference.toLocaleString()} دج</p>
+                  <p className="font-bold mb-1">فارق لصالح العميل: {absDifference.toLocaleString()} دج</p>
                   {customerHasDebt && customerDebtAmount > 0 && (
-                    <p className="text-xs mt-1">📋 لدى العميل ديون بقيمة: {customerDebtAmount.toLocaleString()} دج (سيتم خصم الفارق منها تلقائياً)</p>
+                    <p className="text-xs mt-1">
+                      لدى العميل ديون بقيمة: {customerDebtAmount.toLocaleString()} دج وسيتم خصم الفارق منها تلقائياً
+                    </p>
                   )}
                 </div>
               )}
             </div>
 
-            {/* Payment Method for the difference */}
             {totalDifference !== 0 && (
               <div className="space-y-2">
                 <h3 className="text-sm font-bold">كيف تم التعامل مع الفارق؟</h3>
-                <Select value={paymentType} onValueChange={(v) => setPaymentType(v as any)}>
+                <Select value={paymentType} onValueChange={(value) => setPaymentType(value as 'full' | 'partial' | 'no_payment')}>
                   <SelectTrigger className="h-10">
                     <SelectValue />
                   </SelectTrigger>
@@ -181,8 +190,8 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
                     <Input
                       type="number"
                       value={partialAmount}
-                      onChange={(e) => setPartialAmount(e.target.value)}
-                      placeholder="المبلغ المدفوع/المرتجع"
+                      onChange={(event) => setPartialAmount(event.target.value)}
+                      placeholder="المبلغ المدفوع أو المرتجع"
                       className="h-10"
                       min={0}
                       max={absDifference}
@@ -200,7 +209,7 @@ const PostDeliveryConfirmDialog: React.FC<PostDeliveryConfirmDialogProps> = ({
             className="w-full"
             onClick={() => onConfirm(
               paymentType,
-              paymentType === 'partial' ? Number(partialAmount) || 0 : undefined
+              paymentType === 'partial' ? Number(partialAmount) || 0 : undefined,
             )}
             disabled={isSubmitting || (paymentType === 'partial' && (!partialAmount || Number(partialAmount) <= 0))}
           >

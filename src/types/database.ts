@@ -83,6 +83,7 @@ export const asPricingUnit = (val: string | null | undefined): PricingUnit => {
 export interface Product {
   id: string;
   name: string;
+  app_name: string | null;
   product_code: string | null;
   pieces_per_box: number;
   is_active: boolean;
@@ -93,9 +94,11 @@ export interface Product {
   weight_per_box: number | null;
   price_super_gros: number | null;
   price_gros: number | null;
+  price_invoice_official: number | null;
   price_invoice: number | null;
   price_retail: number | null;
   price_no_invoice: number | null;
+  allow_invoice_sale: boolean;
   allow_unit_sale: boolean;
   image_url: string | null;
 }

@@ -23,6 +23,7 @@ import PostDeliveryConfirmDialog from './PostDeliveryConfirmDialog';
 import InvoicePaymentMethodSelect from './InvoicePaymentMethodSelect';
 import { useProductOffers } from '@/hooks/useProductOffers';
 import { InvoicePaymentMethod } from '@/types/stamp';
+import { useActiveStampTiers, calculateStampAmount } from '@/hooks/useStampTiers';
 import CustomerSummary from '@/components/customers/CustomerSummary';
 import ProductQuantityDialog from '@/components/orders/ProductQuantityDialog';
 
@@ -109,6 +110,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   const logActivity = useLogActivity();
   const queryClient = useQueryClient();
   const { activeOffers } = useProductOffers();
+  const { data: stampTiers } = useActiveStampTiers();
 
   const [items, setItems] = useState<ModifiedItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -544,6 +546,39 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
     return item.is_unit_sale ? item.unit_price : getBoxEquivalentPrice(item);
   }, [getBoxEquivalentPrice]);
 
+  const calculateOrderStamp = useCallback((
+    subtotal: number,
+    targetPaymentType: string,
+    targetInvoicePaymentMethod: InvoicePaymentMethod | null,
+  ) => {
+    let stampAmount = 0;
+    let stampPercentage = 0;
+
+    if (
+      subtotal > 0 &&
+      targetPaymentType === 'with_invoice' &&
+      targetInvoicePaymentMethod === 'cash' &&
+      stampTiers?.length
+    ) {
+      stampAmount = calculateStampAmount(subtotal, stampTiers);
+      const activeTiers = stampTiers.filter((tier) => tier.is_active);
+      const matchedTier = activeTiers.find((tier) => (
+        subtotal >= tier.min_amount &&
+        (tier.max_amount === null || subtotal <= tier.max_amount)
+      ));
+
+      if (matchedTier) {
+        stampPercentage = matchedTier.percentage;
+      }
+    }
+
+    return {
+      stampAmount,
+      stampPercentage,
+      totalAmount: subtotal + stampAmount,
+    };
+  }, [stampTiers]);
+
   const isMissingSchemaColumnError = useCallback((error: any, table: string, column: string) => {
     const message = String(error?.message || '');
     return message.includes(`Could not find the '${column}' column of '${table}'`);
@@ -654,18 +689,33 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
     }
   }, [assignedWorkerId, order.assigned_worker_id, order.branch_id, order.customer_id, order.id, workerId]);
 
-  const originalTotal = orderItems.reduce((sum, item) => {
+  const originalSubtotal = orderItems.reduce((sum, item) => {
     const giftQty = Number((item as any).gift_quantity || 0);
     const paidQty = Math.max(0, Number(item.quantity) - giftQty);
     // unit_price in order_items is already the box price
     return sum + (paidQty * Number(item.unit_price || 0));
   }, 0);
 
-  const orderTotal = items.reduce((sum, item) => {
+  const currentSubtotal = items.reduce((sum, item) => {
     const paidQty = Math.max(0, item.new_quantity - (item.gift_quantity || 0));
     const multiplier = getBoxMultiplier(item.pricing_unit, item.weight_per_box, item.pieces_per_box);
     return sum + (paidQty * item.unit_price * multiplier);
   }, 0);
+
+  const originalCalculatedTotal = useMemo(() => (
+    calculateOrderStamp(
+      originalSubtotal,
+      order.payment_type || 'with_invoice',
+      (order.invoice_payment_method as InvoicePaymentMethod) || null,
+    )
+  ), [calculateOrderStamp, order.invoice_payment_method, order.payment_type, originalSubtotal]);
+
+  const currentCalculatedTotal = useMemo(() => (
+    calculateOrderStamp(currentSubtotal, paymentType, invoicePaymentMethod)
+  ), [calculateOrderStamp, currentSubtotal, invoicePaymentMethod, paymentType]);
+
+  const originalTotal = Number(order.total_amount || originalCalculatedTotal.totalAmount || 0);
+  const orderTotal = currentCalculatedTotal.totalAmount;
 
   const productChanges = items
     .filter(i => i.new_quantity !== i.original_quantity)
@@ -679,7 +729,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
 
   const handleSaveClick = async () => {
     if (!hasChanges || !workerId) return;
-    if (order.status === 'delivered' && productChanges.length > 0) {
+    if (order.status === 'delivered' && Math.abs(orderTotal - originalTotal) > 0.009) {
       // Fetch customer debts and credits before showing dialog
       const { data: debts } = await supabase
         .from('customer_debts')
@@ -825,13 +875,15 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         .select('quantity, unit_price, gift_quantity, pricing_unit, weight_per_box, pieces_per_box')
         .eq('order_id', order.id);
 
-      const newTotal = updatedItems?.reduce((sum, i: any) => {
+      const newSubtotal = updatedItems?.reduce((sum, i: any) => {
         const paidQty = Math.max(0, Number(i.quantity) - Number(i.gift_quantity || 0));
         return sum + (paidQty * Number(i.unit_price || 0));
       }, 0) || 0;
+      const newCalculatedTotal = calculateOrderStamp(newSubtotal, paymentType, invoicePaymentMethod);
+      const newTotal = newCalculatedTotal.totalAmount;
 
       const orderUpdate: Record<string, any> = {};
-      if (newTotal > 0) orderUpdate.total_amount = newTotal;
+      orderUpdate.total_amount = newTotal;
 
       if (workerChanged) {
         const newWorker = assignedWorkerId && assignedWorkerId !== 'none' ? assignedWorkerId : null;
@@ -1491,10 +1543,31 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
 
         {/* Total + Save button */}
         <div className="p-4 border-t space-y-2">
-          {orderTotal > 0 && (
-            <div className="flex items-center justify-between text-sm font-bold">
-              <span>{t('orders.grand_total')}:</span>
-              <span className="text-primary">{orderTotal.toLocaleString()} {dialogText.currency}</span>
+          {currentSubtotal > 0 && (
+            <div className="space-y-1.5 rounded-lg border bg-muted/20 p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">{t('orders.subtotal')}:</span>
+                <span className="font-medium">
+                  {currentSubtotal.toLocaleString('ar-DZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {dialogText.currency}
+                </span>
+              </div>
+              {currentCalculatedTotal.stampAmount > 0 && (
+                <div className="flex items-center justify-between text-sm text-amber-700 dark:text-amber-400">
+                  <span>
+                    {t('orders.stamp_tax')}
+                    {currentCalculatedTotal.stampPercentage > 0 ? ` (${currentCalculatedTotal.stampPercentage}%)` : ''}:
+                  </span>
+                  <span className="font-medium">
+                    {currentCalculatedTotal.stampAmount.toLocaleString('ar-DZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {dialogText.currency}
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between border-t pt-2 text-sm font-bold">
+                <span>{t('orders.grand_total')}:</span>
+                <span className="text-primary">
+                  {orderTotal.toLocaleString('ar-DZ', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} {dialogText.currency}
+                </span>
+              </div>
             </div>
           )}
           <Button

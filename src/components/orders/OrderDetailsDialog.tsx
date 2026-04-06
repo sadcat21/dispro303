@@ -33,15 +33,24 @@ const normalizeSaleItem = (item: any) => ({
   giftQuantity: toSafeNumber(item?.gift_quantity ?? item?.giftQuantity),
 });
 
-const resolveOrderPayment = (order: any, isOrderRequest: boolean) => {
-  const totalAmount = Number(order?.total_amount || 0);
+const resolveOrderPayment = (
+  order: any,
+  isOrderRequest: boolean,
+  totalAmountOverride?: number,
+) => {
+  const totalAmount = totalAmountOverride != null
+    ? Number(totalAmountOverride || 0)
+    : Number(order?.total_amount || 0);
   const paymentStatus = String(order?.payment_status || '').toLowerCase();
   const partialAmount = order?.partial_amount != null ? Number(order.partial_amount) : null;
 
   if (isOrderRequest) return { paidAmount: 0, remainingAmount: totalAmount };
 
   if (partialAmount != null && partialAmount >= 0 && partialAmount < totalAmount) {
-    return { paidAmount: partialAmount, remainingAmount: Math.max(0, totalAmount - partialAmount) };
+    return {
+      paidAmount: partialAmount,
+      remainingAmount: Math.max(0, totalAmount - partialAmount),
+    };
   }
 
   if (['pending', 'payment_pending', 'no_payment', 'credit'].includes(paymentStatus)) {
@@ -59,7 +68,10 @@ const resolveOrderPayment = (order: any, isOrderRequest: boolean) => {
 
   if (order?.remaining_amount != null) {
     const remainingAmount = Number(order.remaining_amount);
-    return { paidAmount: Math.max(0, totalAmount - remainingAmount), remainingAmount: Math.max(0, remainingAmount) };
+    return {
+      paidAmount: Math.max(0, totalAmount - remainingAmount),
+      remainingAmount: Math.max(0, remainingAmount),
+    };
   }
 
   return { paidAmount: totalAmount, remainingAmount: 0 };
@@ -93,14 +105,35 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
     return (order?.items || []) as (OrderItem & { product?: Product })[];
   }, [order?.items, orderItems]);
 
+  const itemsTotalAmount = useMemo(
+    () => displayItems.reduce((sum, item: any) => {
+      const normalizedItem = normalizeSaleItem(item);
+      if (normalizedItem.totalPrice > 0) {
+        return sum + normalizedItem.totalPrice;
+      }
+      const paidQuantity = Math.max(0, normalizedItem.quantity - normalizedItem.giftQuantity);
+      return sum + (paidQuantity * normalizedItem.unitPrice);
+    }, 0),
+    [displayItems],
+  );
+
   if (!order) return null;
 
   const customer = order.customer;
-  const totalAmount = Number(order.total_amount || 0);
   const isOrderRequest = !!(order as any)._isOrderRequest;
-  const fallback = resolveOrderPayment(order, isOrderRequest);
+  const shouldUseStampedTotal = order.payment_type === 'with_invoice' && order.invoice_payment_method === 'cash';
+  const effectiveTotalAmount = shouldUseStampedTotal
+    ? Math.max(
+      itemsTotalAmount,
+      Number(orderDebt?.total_amount || 0),
+      Number(order.total_amount || 0),
+    )
+    : itemsTotalAmount > 0
+      ? itemsTotalAmount
+      : Number(orderDebt?.total_amount || order.total_amount || 0);
+  const fallback = resolveOrderPayment(order, isOrderRequest, effectiveTotalAmount);
   const paidAmount = orderDebt
-    ? totalAmount - Number(orderDebt.remaining_amount || 0)
+    ? Math.max(0, effectiveTotalAmount - Number(orderDebt.remaining_amount || 0))
     : fallback.paidAmount;
   const remainingAmount = orderDebt
     ? Number(orderDebt.remaining_amount || 0)
@@ -127,7 +160,7 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
         giftQuantity: normalizedItem.giftQuantity,
       };
     }),
-    totalAmount,
+    totalAmount: effectiveTotalAmount,
     paidAmount,
     remainingAmount,
     paymentMethod: order.payment_type || 'cash',
@@ -228,7 +261,7 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
 
             <div className="flex items-center justify-between rounded-lg bg-primary/5 p-3">
               <span className="font-bold">المجموع</span>
-              <span className="text-lg font-bold text-primary">{Number(totalAmount || 0).toLocaleString()} DA</span>
+              <span className="text-lg font-bold text-primary">{Number(effectiveTotalAmount || 0).toLocaleString()} DA</span>
             </div>
 
             {remainingAmount > 0 && (

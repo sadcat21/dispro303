@@ -72,6 +72,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
 }) => {
   const { t, dir } = useLanguage();
   const canCustomizePrices = useHasPermission('customize_prices');
+  const invoiceSaleAllowed = (product as any)?.allow_invoice_sale !== false;
   const [quantityInput, setQuantityInput] = useState(String(initialQuantity));
   const piecesPerBox = product?.pieces_per_box || 1;
   const [giftPieces, setGiftPieces] = useState(initialGiftPieces || 0);
@@ -79,7 +80,9 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   const [offerApplied, setOfferApplied] = useState(initialOfferApplied || initialGiftPieces > 0);
   const [isUnitSale, setIsUnitSale] = useState(initialIsUnitSale);
   const [showPricingOverride, setShowPricingOverride] = useState(false);
-  const [itemPaymentType, setItemPaymentType] = useState<PaymentType>(defaultPaymentType);
+  const [itemPaymentType, setItemPaymentType] = useState<PaymentType>(
+    defaultPaymentType === 'with_invoice' && !invoiceSaleAllowed ? 'without_invoice' : defaultPaymentType
+  );
   const [itemPriceSubType, setItemPriceSubType] = useState<PriceSubType>(defaultPriceSubType);
   const [itemInvoicePaymentMethod, setItemInvoicePaymentMethod] = useState<InvoicePaymentMethod | null>(defaultInvoicePaymentMethod);
   const [customPriceOpen, setCustomPriceOpen] = useState(false);
@@ -103,7 +106,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
     : pricingUnit === 'unit'
       ? t('offers.unit_piece')
       : t('offers.unit_box');
-  const basePricingUnitPrice = pricingUnit === 'kg'
+  const defaultPricingUnitPrice = pricingUnit === 'kg'
     ? (safeWeightPerBox > 0 ? unitPrice / safeWeightPerBox : unitPrice)
     : pricingUnit === 'unit'
       ? (safePiecesPerBox > 0 ? unitPrice / safePiecesPerBox : unitPrice)
@@ -121,6 +124,50 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
     return unitSale ? boxPrice / (safePiecesPerBox || 1) : boxPrice;
   }, [pricingUnit, safeWeightPerBox, safePiecesPerBox]);
 
+  const selectedPricingUnitPrice = useMemo(() => {
+    if (!product) return defaultPricingUnitPrice;
+
+    if (itemPaymentType === 'with_invoice' && invoiceSaleAllowed) {
+      return Number(product.price_invoice || 0);
+    }
+
+    switch (itemPriceSubType) {
+      case 'super_gros':
+        return Number(product.price_super_gros || product.price_no_invoice || 0);
+      case 'retail':
+        return Number(product.price_retail || 0);
+      default:
+        return Number(product.price_gros || product.price_no_invoice || 0);
+    }
+  }, [defaultPricingUnitPrice, invoiceSaleAllowed, itemPaymentType, itemPriceSubType, product]);
+
+  const selectedBoxPrice = useMemo(
+    () => resolveSaleUnitPrice(selectedPricingUnitPrice, false),
+    [resolveSaleUnitPrice, selectedPricingUnitPrice],
+  );
+
+  const selectedPiecePrice = useMemo(
+    () => resolveSaleUnitPrice(selectedPricingUnitPrice, true),
+    [resolveSaleUnitPrice, selectedPricingUnitPrice],
+  );
+
+  const hasPricingSelectionChanges = useMemo(() => {
+    if (itemPaymentType !== defaultPaymentType) return true;
+
+    if (itemPaymentType === 'with_invoice') {
+      return (itemInvoicePaymentMethod || null) !== (defaultInvoicePaymentMethod || null);
+    }
+
+    return itemPriceSubType !== defaultPriceSubType;
+  }, [
+    defaultInvoicePaymentMethod,
+    defaultPaymentType,
+    defaultPriceSubType,
+    itemInvoicePaymentMethod,
+    itemPaymentType,
+    itemPriceSubType,
+  ]);
+
   // Sync quantity when initialQuantity changes (edit mode vs new)
   useEffect(() => {
     if (open) {
@@ -137,11 +184,26 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
 
   useEffect(() => {
     if (open) {
+      setItemPaymentType(defaultPaymentType === 'with_invoice' && !invoiceSaleAllowed ? 'without_invoice' : defaultPaymentType);
+      setItemPriceSubType(defaultPriceSubType);
+      setItemInvoicePaymentMethod(defaultPaymentType === 'with_invoice' && !invoiceSaleAllowed ? null : defaultInvoicePaymentMethod);
+    }
+  }, [defaultInvoicePaymentMethod, defaultPaymentType, defaultPriceSubType, invoiceSaleAllowed, open]);
+
+  useEffect(() => {
+    if (open) {
       setGiftPieces(initialGiftPieces || 0);
       setGiftOfferId(initialGiftOfferId);
       setOfferApplied((initialOfferApplied || initialGiftPieces > 0) && !initialIsUnitSale);
     }
   }, [open, initialGiftPieces, initialGiftOfferId, initialOfferApplied, initialIsUnitSale]);
+
+  useEffect(() => {
+    if (!invoiceSaleAllowed && itemPaymentType === 'with_invoice') {
+      setItemPaymentType('without_invoice');
+      setItemInvoicePaymentMethod(null);
+    }
+  }, [invoiceSaleAllowed, itemPaymentType]);
 
   // Offer must be applied before confirming (mandatory)
   const hasUnappliedOffer = !isUnitSale && giftPieces > 0 && !offerApplied;
@@ -149,7 +211,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   const handleConfirm = () => {
     const effectiveQty = isUnitSale ? quantity : parsed.totalBoxes;
     if (product && effectiveQty > 0 && !hasUnappliedOffer) {
-      const perItemPricing: PerItemPricing | undefined = (showPricingOverride || hasCustomUnitPrice) ? {
+      const perItemPricing: PerItemPricing | undefined = (hasPricingSelectionChanges || hasCustomUnitPrice) ? {
         paymentType: itemPaymentType,
         invoicePaymentMethod: itemPaymentType === 'with_invoice' ? itemInvoicePaymentMethod : null,
         priceSubType: itemPriceSubType,
@@ -216,9 +278,9 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
       setOfferApplied((initialOfferApplied || initialGiftPieces > 0) && !initialIsUnitSale);
       setIsUnitSale(initialIsUnitSale);
       setShowPricingOverride(false);
-      setItemPaymentType(defaultPaymentType);
+      setItemPaymentType(defaultPaymentType === 'with_invoice' && !invoiceSaleAllowed ? 'without_invoice' : defaultPaymentType);
       setItemPriceSubType(defaultPriceSubType);
-      setItemInvoicePaymentMethod(defaultInvoicePaymentMethod);
+      setItemInvoicePaymentMethod(defaultPaymentType === 'with_invoice' && !invoiceSaleAllowed ? null : defaultInvoicePaymentMethod);
       setCustomUnitPriceInput(initialCustomUnitPrice ? String(initialCustomUnitPrice) : '');
     }
     onOpenChange(isOpen);
@@ -239,7 +301,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   const baseQuantity = quantity;
   const basePieces = isUnitSale ? quantity : parsed.totalPieces;
   const totalPieces = isUnitSale ? quantity : (parsed.totalPieces + appliedGiftPieces);
-  const baseUnitPrice = isUnitSale ? unitPiecePrice : unitPrice;
+  const baseUnitPrice = isUnitSale ? selectedPiecePrice : selectedBoxPrice;
   const displayPrice = hasCustomUnitPrice ? resolveSaleUnitPrice(customUnitPriceValue, isUnitSale) : baseUnitPrice;
   const displayTotal = isUnitSale ? (displayPrice * quantity) : (displayPrice * parsed.totalBoxes);
 
@@ -273,9 +335,9 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
                       {displayPrice.toLocaleString()} {t('common.currency')}/{isUnitSale ? t('offers.unit_piece') : t('offers.unit_box')}
                     </Badge>
                   )}
-                  {!isUnitSale && unitPiecePrice > 0 && (
+                  {!isUnitSale && selectedPiecePrice > 0 && (
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
-                      {unitPiecePrice.toLocaleString()} {t('common.currency')}/{t('offers.unit_piece')}
+                      {selectedPiecePrice.toLocaleString()} {t('common.currency')}/{t('offers.unit_piece')}
                     </Badge>
                   )}
                 </div>
@@ -462,6 +524,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
                       size="sm"
                       className="h-9 flex items-center gap-1 text-xs"
                       onClick={() => setItemPaymentType('with_invoice')}
+                      disabled={!invoiceSaleAllowed}
                     >
                       <Receipt className="w-3.5 h-3.5" />
                       {t('orders.with_invoice')}
@@ -477,6 +540,12 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
                       {t('orders.without_invoice')}
                     </Button>
                   </div>
+
+                  {!invoiceSaleAllowed && (
+                    <p className="text-[11px] text-amber-600">
+                      {safeT('products.invoice1_disabled_hint', 'هذا المنتج غير مسموح ببيعه عبر Facture 1 من إدارة المنتجات.')}
+                    </p>
+                  )}
 
                   {itemPaymentType === 'without_invoice' && (
                     <div className="grid grid-cols-3 gap-1">
@@ -522,10 +591,10 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
                   inputMode="decimal"
                   value={customUnitPriceInput}
                   onChange={(e) => setCustomUnitPriceInput(e.target.value)}
-                  placeholder={String(basePricingUnitPrice || 0)}
+                  placeholder={String(selectedPricingUnitPrice || 0)}
                 />
                 <div className="text-[10px] text-muted-foreground">
-                  {safeT('orders.default_price', 'السعر الافتراضي')}: {basePricingUnitPrice.toLocaleString()} {t('common.currency')} / {pricingUnitLabel}
+                  {safeT('orders.default_price', 'السعر الافتراضي')}: {selectedPricingUnitPrice.toLocaleString()} {t('common.currency')} / {pricingUnitLabel}
                 </div>
               </div>
               <div className="flex gap-2">

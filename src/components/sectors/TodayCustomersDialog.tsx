@@ -2603,9 +2603,7 @@ const OrderDetailsDialog: React.FC<{ order: any; onClose: () => void; onCancelOr
   const isDirectSale = order._isDirectSale;
   const items = isDirectSale ? (order.items || []) : (order.items || []);
   const customer = isDirectSale ? order.customer : order.customer;
-  const totalAmount = Number(order.total_amount || 0);
   const isOrderRequest = !isDirectSale && !!order._isOrderRequest;
-  const fallback = resolveOrderPayment(order, isOrderRequest);
 
   // For delivered orders, fetch the actual debt from customer_debts to stay in sync
   const { data: orderDebt } = useQuery({
@@ -2622,9 +2620,30 @@ const OrderDetailsDialog: React.FC<{ order: any; onClose: () => void; onCancelOr
     enabled: !!order.id && order.status === 'delivered',
   });
 
+  const itemsTotalAmount = items.reduce((sum: number, item: any) => {
+    const normalizedItem = normalizeSaleItem(item);
+    if (normalizedItem.totalPrice > 0) {
+      return sum + normalizedItem.totalPrice;
+    }
+    const paidQuantity = Math.max(0, normalizedItem.quantity - normalizedItem.giftQuantity);
+    return sum + (paidQuantity * normalizedItem.unitPrice);
+  }, 0);
+
+  const shouldUseStampedTotal = order.payment_type === 'with_invoice' && order.invoice_payment_method === 'cash';
+  const effectiveTotalAmount = shouldUseStampedTotal
+    ? Math.max(
+      itemsTotalAmount,
+      Number(orderDebt?.total_amount || 0),
+      Number(order.total_amount || 0),
+    )
+    : itemsTotalAmount > 0
+      ? itemsTotalAmount
+      : Number(orderDebt?.total_amount || order.total_amount || 0);
+  const fallback = resolveOrderPayment({ ...order, total_amount: effectiveTotalAmount }, isOrderRequest);
+
   // Use actual debt data when available, otherwise fall back to calculated values
   const paidAmount = orderDebt
-    ? totalAmount - Number(orderDebt.remaining_amount || 0)
+    ? Math.max(0, effectiveTotalAmount - Number(orderDebt.remaining_amount || 0))
     : fallback.paidAmount;
   const remainingAmount = orderDebt
     ? Number(orderDebt.remaining_amount || 0)
@@ -2655,7 +2674,7 @@ const OrderDetailsDialog: React.FC<{ order: any; onClose: () => void; onCancelOr
         giftQuantity: normalizedItem.giftQuantity,
       };
     }),
-    totalAmount,
+    totalAmount: effectiveTotalAmount,
     paidAmount,
     remainingAmount,
     paymentMethod: order.payment_type || order.paymentMethod || 'cash',
@@ -2754,7 +2773,7 @@ const OrderDetailsDialog: React.FC<{ order: any; onClose: () => void; onCancelOr
           {/* Total */}
           <div className="bg-primary/5 rounded-lg p-3 flex items-center justify-between">
             <span className="font-bold">المجموع</span>
-            <span className="font-bold text-lg text-primary">{Number(totalAmount || 0).toLocaleString()} DA</span>
+            <span className="font-bold text-lg text-primary">{Number(effectiveTotalAmount || 0).toLocaleString()} DA</span>
           </div>
 
           {/* Paid / Remaining - show only when partial or no payment */}

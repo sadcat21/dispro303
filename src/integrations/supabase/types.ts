@@ -3355,6 +3355,8 @@ export type Database = {
       }
       products: {
         Row: {
+          app_name: string | null
+          allow_invoice_sale: boolean
           allow_unit_sale: boolean
           created_at: string
           created_by: string | null
@@ -3365,6 +3367,7 @@ export type Database = {
           pieces_per_box: number
           product_code: string | null
           price_gros: number | null
+          price_invoice_official: number | null
           price_invoice: number | null
           price_no_invoice: number | null
           price_retail: number | null
@@ -3374,6 +3377,8 @@ export type Database = {
           weight_per_box: number | null
         }
         Insert: {
+          app_name?: string | null
+          allow_invoice_sale?: boolean
           allow_unit_sale?: boolean
           created_at?: string
           created_by?: string | null
@@ -3384,6 +3389,7 @@ export type Database = {
           pieces_per_box?: number
           product_code?: string | null
           price_gros?: number | null
+          price_invoice_official?: number | null
           price_invoice?: number | null
           price_no_invoice?: number | null
           price_retail?: number | null
@@ -3393,6 +3399,8 @@ export type Database = {
           weight_per_box?: number | null
         }
         Update: {
+          app_name?: string | null
+          allow_invoice_sale?: boolean
           allow_unit_sale?: boolean
           created_at?: string
           created_by?: string | null
@@ -3403,6 +3411,7 @@ export type Database = {
           pieces_per_box?: number
           product_code?: string | null
           price_gros?: number | null
+          price_invoice_official?: number | null
           price_invoice?: number | null
           price_no_invoice?: number | null
           price_retail?: number | null
