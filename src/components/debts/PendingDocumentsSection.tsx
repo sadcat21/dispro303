@@ -1,6 +1,6 @@
 import React from 'react';
 import { Badge } from '@/components/ui/badge';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { FileWarning, Phone, Calendar } from 'lucide-react';
@@ -52,7 +52,13 @@ const PendingDocumentsSection: React.FC = () => {
               >
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <CustomerLabel customer={{ name: doc.customerName }} compact hideBadges />
+                    <CustomerSummary
+                      customer={{ name: doc.customerName, phone: doc.customerPhone || undefined }}
+                      compact
+                      hideBadges
+                      showAvatar={false}
+                      showMeta={false}
+                    />
                     <Badge className={`text-[10px] px-1.5 ${getDocColor(doc.documentType)}`}>
                       {getDocLabel(doc.documentType)}
                     </Badge>

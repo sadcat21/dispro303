@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Loader2, FileCheck2, Truck, Clock, ShieldCheck, ShieldAlert, AlertCircle, ClipboardCheck, Stamp, CheckCircle, XCircle } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
-import CheckVerificationDialog from '@/components/orders/CheckVerificationDialog';
+import DocumentFlowDialog from '@/components/documents/DocumentFlowDialog';
 import { toast } from 'sonner';
 
 interface StampedInvoice {
@@ -420,14 +420,16 @@ const DocumentCollectionsSummary: React.FC<DocumentCollectionsSummaryProps> = ({
 
       {/* Verification dialog */}
       {verifyDoc && (
-        <CheckVerificationDialog
+        <DocumentFlowDialog
           open={!!verifyDoc}
           onOpenChange={(open) => { if (!open) setVerifyDoc(null); }}
+          mode="verify"
+          orderId={verifyDoc.orderId}
           orderTotal={verifyDoc.orderTotal}
           customerName={verifyDoc.customerName}
+          documentType={verifyDoc.documentType === 'check' ? 'check' : verifyDoc.documentType === 'transfer' || verifyDoc.documentType === 'virement' ? 'transfer' : 'receipt'}
           initialCheckReceived={true}
           initialVerification={verifyDoc.verification}
-          documentType={verifyDoc.documentType === 'check' ? 'check' : verifyDoc.documentType === 'transfer' || verifyDoc.documentType === 'virement' ? 'transfer' : 'receipt'}
           onConfirm={async (data) => {
             if (!data.checkReceived || !data.verification) {
               setVerifyDoc(null);

@@ -14,8 +14,8 @@ import { formatDate } from '@/utils/formatters';
 import { useAuth } from '@/contexts/AuthContext';
 import { useCustomerDebts, useCreateDebt } from '@/hooks/useCustomerDebts';
 import { CustomerDebtWithDetails } from '@/types/accounting';
-import CustomerLabel from '@/components/customers/CustomerLabel';
-import DebtDetailsDialog from '@/components/debts/DebtDetailsDialog';
+import CustomerSummary from '@/components/customers/CustomerSummary';
+import DebtFlowDialog from '@/components/debts/DebtFlowDialog';
 import PendingDocumentsSection from '@/components/debts/PendingDocumentsSection';
 import PermissionGate from '@/components/auth/PermissionGate';
 import { isAdminRole } from '@/lib/utils';
@@ -187,7 +187,6 @@ const CustomerDebts: React.FC = () => {
         branch_id: activeBranch?.id,
         total_amount: amount,
         paid_amount: 0,
-        remaining_amount: amount,
         collection_type: 'none',
         due_date: newDebtDueDate || undefined,
         notes: newDebtNotes || 'دين سابق مضاف يدويًا',
@@ -305,7 +304,7 @@ const CustomerDebts: React.FC = () => {
                       <div className="flex flex-col gap-3">
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0 flex-1 text-right">
-                            <CustomerLabel
+                            <CustomerSummary
                               customer={{
                                 name: primaryDebt?.customer?.name,
                                 store_name: primaryDebt?.customer?.store_name,
@@ -314,6 +313,8 @@ const CustomerDebts: React.FC = () => {
                                 zone_name: zone ? getLocalizedName(zone, language) : undefined,
                               }}
                               className="items-end"
+                              showAvatar={false}
+                              showMeta={false}
                             />
                             <div className="mt-1 flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
                               {group.wilaya && <span>{group.wilaya}</span>}
@@ -354,9 +355,10 @@ const CustomerDebts: React.FC = () => {
 
         {/* Debt Details Dialog */}
         {selectedCustomer && (
-          <DebtDetailsDialog
+          <DebtFlowDialog
             open={!!selectedCustomer}
             onOpenChange={(open) => !open && setSelectedCustomer(null)}
+            mode="details"
             debts={selectedCustomer.debts}
             customerName={selectedCustomer.name}
             customerId={selectedCustomer.id}

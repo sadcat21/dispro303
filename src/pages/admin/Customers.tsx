@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, User, Loader2, Trash2, Phone, MapPin, Search, Pencil, Building2, ChevronDown, ChevronUp, Navigation, Shield, Tag, UserCircle, Store, CreditCard, Warehouse, Eye, PlusCircle, Banknote, Truck, AlertTriangle, ShoppingBag, Calendar, Package, MapPinPlus, FileEdit, Settings2, BadgeCheck } from 'lucide-react';
+import { UserPlus, User, Loader2, Trash2, Phone, MapPin, Search, Pencil, Building2, ChevronDown, ChevronUp, Navigation, Shield, Tag, UserCircle, Store, CreditCard, Warehouse, Eye, PlusCircle, Banknote, Truck, AlertTriangle, ShoppingBag, Calendar, Package, MapPinPlus, FileEdit, Settings2, BadgeCheck, Activity } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 import { toast } from 'sonner';
 import { ALGERIAN_WILAYAS, DEFAULT_WILAYA } from '@/data/algerianWilayas';
@@ -669,6 +669,17 @@ const Customers: React.FC = () => {
                     {renderBtn('call', <Phone className="w-3.5 h-3.5" />, () => window.location.href = `tel:${customer.phone}`, !!customer.phone)}
                     {renderBtn('new_order', <PlusCircle className="w-3.5 h-3.5" />, () => navigate('/orders', { state: { customerId: customer.id, paymentType: customer.default_payment_type } }))}
                     {renderBtn('debts', <CreditCard className="w-3.5 h-3.5" />, () => navigate('/customer-debts', { state: { customerId: customer.id } }))}
+                    {isManager && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 text-sky-700 hover:text-sky-800 hover:bg-sky-100"
+                        onClick={() => navigate(`/customer-journey?customerId=${customer.id}`)}
+                        title={t('nav.customer_journey')}
+                      >
+                        <Activity className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
                     {renderBtn('direct_sale', <Banknote className="w-3.5 h-3.5" />, () => navigate('/orders', { state: { customerId: customer.id, action: 'sale' } }))}
                     {renderBtn('delivery', <Truck className="w-3.5 h-3.5" />, () => navigate('/orders', { state: { customerId: customer.id, action: 'delivery' } }))}
                     {renderBtn('last_order', <ShoppingBag className="w-3.5 h-3.5" />, () => openLastOrderDetails(customer))}

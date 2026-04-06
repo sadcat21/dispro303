@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { format } from 'date-fns';
 import { ar } from 'date-fns/locale';
 import { AlertCircle, CalendarDays } from 'lucide-react';
@@ -113,11 +114,16 @@ const UncollectedDebtsDialog = ({ open, onOpenChange }: Props) => {
             {groups.map((group) => (
               <Card key={group.customer_id}>
                 <CardContent className="p-3">
-                  <div className="mb-2 flex items-center justify-between">
-                    <div>
-                      <p className="text-sm font-bold">{group.customer_name}</p>
-                      {group.store_name && <p className="text-xs text-muted-foreground">{group.store_name}</p>}
-                    </div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <CustomerSummary
+                      customer={{
+                        name: group.customer_name,
+                        store_name: group.store_name,
+                      }}
+                      compact
+                      showAvatar={false}
+                      showMeta={false}
+                    />
                     <div className="text-left">
                       <p className="font-bold text-destructive">{group.total_remaining.toLocaleString()} د.ج</p>
                       <Badge variant="outline" className="mt-1 text-[10px]">

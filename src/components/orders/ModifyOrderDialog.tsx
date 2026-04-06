@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Plus, Minus, Loader2, Package, Save, PlusCircle, Trash2, Truck, Gift, CalendarDays, CreditCard, Banknote, AlertTriangle } from 'lucide-react';
+import { Loader2, Package, Save, PlusCircle, Gift, CalendarDays, CreditCard, Banknote, AlertTriangle, XCircle } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Calendar } from '@/components/ui/calendar';
@@ -17,12 +17,14 @@ import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLogActivity } from '@/hooks/useActivityLogs';
 import { useQueryClient } from '@tanstack/react-query';
-import { OrderWithDetails, OrderItem, Product, PriceSubType } from '@/types/database';
+import { OrderWithDetails, OrderItem, Product, PriceSubType, PaymentType } from '@/types/database';
 import DeliveryWorkerSelect from './DeliveryWorkerSelect';
 import PostDeliveryConfirmDialog from './PostDeliveryConfirmDialog';
 import InvoicePaymentMethodSelect from './InvoicePaymentMethodSelect';
 import { useProductOffers } from '@/hooks/useProductOffers';
 import { InvoicePaymentMethod } from '@/types/stamp';
+import CustomerSummary from '@/components/customers/CustomerSummary';
+import ProductQuantityDialog from '@/components/orders/ProductQuantityDialog';
 
 interface ModifyOrderDialogProps {
   open: boolean;
@@ -38,13 +40,18 @@ interface ModifiedItem {
   original_quantity: number;
   new_quantity: number;
   unit_price: number; // per-unit price (per kg, per piece, or per box)
+  original_unit_price: number;
   gift_quantity: number;
+  gift_pieces?: number;
   original_gift_quantity: number;
+  original_gift_pieces?: number;
   pieces_per_box: number;
   pricing_unit: string; // 'box' | 'kg' | 'unit'
   weight_per_box: number;
   item_subtype?: string; // per-item override: 'super_gros' | 'gros' | 'retail' | 'invoice'
+  original_item_subtype?: string;
   is_unit_sale?: boolean;
+  custom_unit_price?: number;
 }
 
 const getBoxMultiplier = (pricingUnit: string, weightPerBox: number, piecesPerBox: number): number => {
@@ -58,10 +65,46 @@ const supportsUnitSale = (product?: Product | null): boolean => {
   return !!product.allow_unit_sale && Number(product.pieces_per_box || 0) > 1;
 };
 
+const resolveOrderPaymentSnapshot = (order: any) => {
+  const totalAmount = Number(order?.total_amount || 0);
+  const paymentStatus = String(order?.payment_status || '').toLowerCase();
+  const partialAmount = order?.partial_amount != null ? Number(order.partial_amount) : null;
+
+  if (partialAmount != null && partialAmount >= 0 && partialAmount < totalAmount) {
+    return {
+      paidAmount: partialAmount,
+      remainingAmount: Math.max(0, totalAmount - partialAmount),
+    };
+  }
+
+  if (['pending', 'payment_pending', 'no_payment', 'credit'].includes(paymentStatus)) {
+    return { paidAmount: 0, remainingAmount: totalAmount };
+  }
+
+  if (['partial', 'payment_partial'].includes(paymentStatus)) {
+    const paid = Math.max(0, Math.min(totalAmount, partialAmount ?? 0));
+    return { paidAmount: paid, remainingAmount: Math.max(0, totalAmount - paid) };
+  }
+
+  if (['cash', 'check', 'payment_full', 'paid', 'full'].includes(paymentStatus)) {
+    return { paidAmount: totalAmount, remainingAmount: 0 };
+  }
+
+  if (order?.remaining_amount != null) {
+    const remainingAmount = Number(order.remaining_amount);
+    return {
+      paidAmount: Math.max(0, totalAmount - remainingAmount),
+      remainingAmount: Math.max(0, remainingAmount),
+    };
+  }
+
+  return { paidAmount: totalAmount, remainingAmount: 0 };
+};
+
 const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   open, onOpenChange, order, orderItems,
 }) => {
-  const { t, dir } = useLanguage();
+  const { t, dir, language } = useLanguage();
   const { workerId, role } = useAuth();
   const logActivity = useLogActivity();
   const queryClient = useQueryClient();
@@ -80,8 +123,17 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   const [paymentType, setPaymentType] = useState<string>(order.payment_type || 'with_invoice');
   const [invoicePaymentMethod, setInvoicePaymentMethod] = useState<InvoicePaymentMethod | null>((order.invoice_payment_method as InvoicePaymentMethod) || null);
   const [priceSubType, setPriceSubType] = useState<PriceSubType>('gros');
+  const [showQuantityDialog, setShowQuantityDialog] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [editingTargetProductId, setEditingTargetProductId] = useState<string | null>(null);
+  const [editingInitialQuantity, setEditingInitialQuantity] = useState(1);
+  const [editingInitialGiftPieces, setEditingInitialGiftPieces] = useState(0);
+  const [editingInitialOfferApplied, setEditingInitialOfferApplied] = useState(false);
+  const [editingInitialIsUnitSale, setEditingInitialIsUnitSale] = useState(false);
+  const [editingInitialCustomUnitPrice, setEditingInitialCustomUnitPrice] = useState<number | undefined>(undefined);
+  const [editingInitialGiftOfferId, setEditingInitialGiftOfferId] = useState<string | undefined>(undefined);
 
-  // Payment adjustment for delivered orders — use partial_amount (actual DB column)
+  // Payment adjustment for delivered orders - use partial_amount (actual DB column)
   const initPaid = (() => {
     const ps = String(order.payment_status || '').toLowerCase();
     if (ps === 'partial' && order.partial_amount != null) return Number(order.partial_amount);
@@ -92,6 +144,29 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   const [adjustRemainingAmount, setAdjustRemainingAmount] = useState<number>(Math.max(0, Number(order.total_amount || 0) - initPaid));
 
   const canChangeWorker = isAdminRole(role) || order.created_by === workerId;
+  const dialogText = useMemo(() => ({
+    removeDate: language === 'ar' ? 'إزالة التاريخ' : language === 'fr' ? 'Retirer la date' : 'Remove date',
+    detail: language === 'ar' ? 'تجزئة' : language === 'fr' ? 'Detail' : 'Retail',
+    adjustPaymentTitle: language === 'ar' ? 'تعديل المبلغ المدفوع / المتبقي' : language === 'fr' ? 'Ajuster le montant paye / restant' : 'Adjust paid / remaining amount',
+    adjustPaymentDescription: language === 'ar'
+      ? 'إذا لم يدفع العميل أو دفع جزئيا بعد التسليم، عدل المبالغ هنا وسيتم تحديث الدين والوصل تلقائيا.'
+      : language === 'fr'
+        ? 'Si le client n\'a pas paye ou a paye partiellement apres la livraison, ajustez les montants ici et la dette ainsi que le recu seront mis a jour automatiquement.'
+        : 'If the customer did not pay or only partially paid after delivery, adjust the amounts here and the debt and receipt will be updated automatically.',
+    remainingDebtLabel: language === 'ar' ? 'المبلغ المتبقي (دين)' : language === 'fr' ? 'Montant restant (dette)' : 'Remaining amount (debt)',
+    noPaymentDebt: language === 'ar' ? 'بدون دفع (دين)' : language === 'fr' ? 'Sans paiement (dette)' : 'No payment (debt)',
+    halfAmount: language === 'ar' ? 'نصف المبلغ' : language === 'fr' ? 'Moitie du montant' : 'Half amount',
+    willUpdate: language === 'ar' ? 'سيتم تحديث:' : language === 'fr' ? 'Mise a jour :' : 'Will update:',
+    paidAmount: language === 'ar' ? 'المبلغ المدفوع' : language === 'fr' ? 'Montant paye' : 'Paid amount',
+    remainingAmount: language === 'ar' ? 'المبلغ المتبقي' : language === 'fr' ? 'Montant restant' : 'Remaining amount',
+    createDebt: language === 'ar' ? 'سيتم إنشاء/تحديث دين بقيمة' : language === 'fr' ? 'Une dette sera creee/mise a jour de' : 'A debt will be created/updated for',
+    settleDebt: language === 'ar' ? 'سيتم تسوية ديون بقيمة' : language === 'fr' ? 'Des dettes seront reglees de' : 'Debts will be settled for',
+    noImage: language === 'ar' ? 'لا صورة' : language === 'fr' ? 'Aucune image' : 'No image',
+    addProductUnit: language === 'ar' ? 'وحدة إضافة المنتج' : language === 'fr' ? 'Unite d\'ajout du produit' : 'Product add unit',
+    gift: language === 'ar' ? 'هدية' : language === 'fr' ? 'Cadeau' : 'Gift',
+    newItem: language === 'ar' ? 'جديد' : language === 'fr' ? 'Nouveau' : 'New',
+    currency: 'DA',
+  }), [language]);
 
   // Initialize items from orderItems
   useEffect(() => {
@@ -112,11 +187,16 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
           original_quantity: item.quantity,
           new_quantity: item.quantity,
           unit_price: rawUnitPrice,
+          original_unit_price: rawUnitPrice,
           gift_quantity: Number(item.gift_quantity || 0),
+          gift_pieces: Number((item as any).gift_pieces || 0),
           original_gift_quantity: Number(item.gift_quantity || 0),
+          original_gift_pieces: Number((item as any).gift_pieces || 0),
           pieces_per_box: piecesPerBox,
           pricing_unit: pricingUnit,
           weight_per_box: weightPerBox,
+          item_subtype: ((item as any).price_subtype as string | undefined) || undefined,
+          original_item_subtype: ((item as any).price_subtype as string | undefined) || undefined,
           is_unit_sale: false,
         };
       }));
@@ -220,50 +300,117 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
     return Math.max(0, item.new_quantity - (item.gift_quantity || 0));
   }, []);
 
-  const updateQuantity = (index: number, delta: number) => {
-    setItems(prev => prev.map((item, i) => {
-      if (i !== index) return item;
-      const currentPaidQty = Math.max(0, item.new_quantity - (item.gift_quantity || 0));
-      const newPaidQty = Math.max(0, currentPaidQty + delta);
+  const getProductById = useCallback((productId: string) => {
+    return (
+      products.find((product) => product.id === productId) ||
+      orderItems.find((item) => item.product_id === productId)?.product ||
+      null
+    );
+  }, [orderItems, products]);
 
-      if (item.is_unit_sale) {
-        return {
-          ...item,
-          new_quantity: newPaidQty,
-          gift_quantity: 0,
-        };
-      }
+  const getRawProductPrice = useCallback((product: Product, subtype: string): number => {
+    if (subtype === 'invoice') return Number(product.price_invoice || 0);
 
-      const recalculated = recalcFromPaidQuantity(item.product_id, newPaidQty, item.pieces_per_box);
+    switch (subtype) {
+      case 'super_gros':
+        return Number(product.price_super_gros || product.price_no_invoice || 0);
+      case 'retail':
+        return Number(product.price_retail || 0);
+      default:
+        return Number(product.price_gros || product.price_no_invoice || 0);
+    }
+  }, []);
+
+  const resolveCustomSalePrice = useCallback((product: Product, baseUnitPrice: number, unitSale: boolean): number => {
+    const piecesPerBox = product.pieces_per_box || 1;
+    const weightPerBox = product.weight_per_box || 1;
+    const pricingUnit = product.pricing_unit || 'box';
+
+    if (pricingUnit === 'kg') {
+      const boxPrice = baseUnitPrice * weightPerBox;
+      return unitSale ? boxPrice / piecesPerBox : boxPrice;
+    }
+
+    if (pricingUnit === 'unit') {
+      const piecePrice = baseUnitPrice;
+      return unitSale ? piecePrice : piecePrice * piecesPerBox;
+    }
+
+    const boxPrice = baseUnitPrice;
+    return unitSale ? boxPrice / piecesPerBox : boxPrice;
+  }, []);
+
+  const getCurrentItemSubtype = useCallback((item: ModifiedItem) => {
+    return item.item_subtype || (paymentType === 'with_invoice' ? 'invoice' : priceSubType);
+  }, [paymentType, priceSubType]);
+
+  const openItemEditor = useCallback((item: ModifiedItem) => {
+    const product = getProductById(item.product_id);
+    if (!product) return;
+
+    const totalGiftPieces = ((item.gift_quantity || 0) * (item.pieces_per_box || 1)) + (item.gift_pieces || 0);
+
+    setEditingTargetProductId(item.product_id);
+    setEditingInitialQuantity(getPaidQuantity(item));
+    setEditingInitialGiftPieces(totalGiftPieces);
+    setEditingInitialOfferApplied(totalGiftPieces > 0);
+    setEditingInitialIsUnitSale(!!item.is_unit_sale);
+    setEditingInitialCustomUnitPrice(item.custom_unit_price);
+    setEditingInitialGiftOfferId(undefined);
+    setSelectedProduct(product);
+    setShowQuantityDialog(true);
+  }, [getPaidQuantity, getProductById]);
+
+  const handleEditProductWithQuantity = useCallback((
+    productId: string,
+    quantity: number,
+    giftInfo?: { giftQuantity: number; giftPieces: number; offerId?: string },
+    isUnitSale?: boolean,
+    perItemPricing?: { paymentType: PaymentType; invoicePaymentMethod: InvoicePaymentMethod | null; priceSubType: PriceSubType; customUnitPrice?: number }
+  ) => {
+    const product = getProductById(productId);
+    if (!product) return;
+
+    setItems((prev) => prev.map((item) => {
+      if (item.product_id !== productId) return item;
+
+      const currentSubtype = getCurrentItemSubtype(item);
+      const nextSubtype = perItemPricing
+        ? (perItemPricing.paymentType === 'with_invoice' ? 'invoice' : perItemPricing.priceSubType)
+        : currentSubtype;
+      const rawUnitPrice = perItemPricing
+        ? (
+          perItemPricing.customUnitPrice !== undefined
+            ? perItemPricing.customUnitPrice
+            : getRawProductPrice(product, nextSubtype)
+        )
+        : (
+          item.custom_unit_price !== undefined
+            ? item.custom_unit_price
+            : getRawProductPrice(product, currentSubtype)
+        );
+      const totalGiftPieces = giftInfo?.giftPieces || 0;
+      const safePiecesPerBox = product.pieces_per_box || item.pieces_per_box || 1;
+      const giftQuantity = isUnitSale ? 0 : (giftInfo?.giftQuantity || 0);
+      const giftPiecesRemainder = isUnitSale ? 0 : (safePiecesPerBox > 0 ? totalGiftPieces % safePiecesPerBox : totalGiftPieces);
+
       return {
         ...item,
-        new_quantity: recalculated.total_quantity,
-        gift_quantity: recalculated.gift_quantity,
+        new_quantity: quantity,
+        gift_quantity: giftQuantity,
+        gift_pieces: giftPiecesRemainder,
+        unit_price: isUnitSale ? resolveCustomSalePrice(product, rawUnitPrice, true) : rawUnitPrice,
+        item_subtype: nextSubtype,
+        is_unit_sale: !!isUnitSale,
+        custom_unit_price: perItemPricing ? perItemPricing.customUnitPrice : item.custom_unit_price,
       };
     }));
-  };
 
-  const setQuantity = (index: number, value: string) => {
-    const paidQty = Math.max(0, Math.floor(Number(value) || 0));
-    setItems(prev => prev.map((item, i) => {
-      if (i !== index) return item;
-
-      if (item.is_unit_sale) {
-        return {
-          ...item,
-          new_quantity: paidQty,
-          gift_quantity: 0,
-        };
-      }
-
-      const recalculated = recalcFromPaidQuantity(item.product_id, paidQty, item.pieces_per_box);
-      return {
-        ...item,
-        new_quantity: recalculated.total_quantity,
-        gift_quantity: recalculated.gift_quantity,
-      };
-    }));
-  };
+    setShowQuantityDialog(false);
+    setSelectedProduct(null);
+    setEditingTargetProductId(null);
+    setEditingInitialGiftOfferId(undefined);
+  }, [getCurrentItemSubtype, getProductById, getRawProductPrice, resolveCustomSalePrice]);
 
   const addProduct = () => {
     if (!newProductId) return;
@@ -302,8 +449,11 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
       original_quantity: 0,
       new_quantity: recalculated.total_quantity,
       unit_price: effectiveUnitPrice,
+      original_unit_price: effectiveUnitPrice,
       gift_quantity: recalculated.gift_quantity,
+      gift_pieces: 0,
       original_gift_quantity: 0,
+      original_gift_pieces: 0,
       pieces_per_box: piecesPerBox,
       pricing_unit: pricingUnit,
       weight_per_box: weightPerBox,
@@ -313,60 +463,45 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
     setNewProductSaleUnit('box');
   };
 
-  const removeNewItem = (index: number) => {
-    const item = items[index];
-    if (item.id) return; // Can't remove existing items, set qty to 0
-    setItems(prev => prev.filter((_, i) => i !== index));
-  };
+  const handleRemoveItem = useCallback((productId: string) => {
+    setItems((prev) => {
+      const targetItem = prev.find((item) => item.product_id === productId);
+      if (!targetItem) return prev;
+
+      if (targetItem.id) {
+        return prev.map((item) => item.product_id === productId ? {
+          ...item,
+          new_quantity: 0,
+          gift_quantity: 0,
+          gift_pieces: 0,
+        } : item);
+      }
+
+      return prev.filter((item) => item.product_id !== productId);
+    });
+  }, []);
+
+  const updateQuantity = useCallback(() => {}, []);
+  const setQuantity = useCallback(() => {}, []);
+  const changeItemSubtype = useCallback(() => {}, []);
 
   // Recalculate item prices when payment type or price subtype changes
   const recalcItemPrices = useCallback((pt: string, pst: PriceSubType) => {
     setItems(prev => prev.map(item => {
       const product = products.find(p => p.id === item.product_id);
       if (!product) return item;
-      let newUnitPrice: number;
-      if (pt === 'with_invoice') {
-        newUnitPrice = Number(product.price_invoice || 0);
-      } else {
-        switch (pst) {
-          case 'super_gros': newUnitPrice = Number(product.price_super_gros || product.price_no_invoice || 0); break;
-          case 'retail': newUnitPrice = Number(product.price_retail || 0); break;
-          default: newUnitPrice = Number(product.price_gros || product.price_no_invoice || 0); break;
-        }
-      }
 
-      const adjustedUnitPrice = item.is_unit_sale
-        ? newUnitPrice / Math.max(1, item.pieces_per_box)
-        : newUnitPrice;
+      if (item.custom_unit_price !== undefined) return item;
 
-      return { ...item, unit_price: adjustedUnitPrice };
+      const subtype = item.item_subtype || (pt === 'with_invoice' ? 'invoice' : pst);
+      const rawUnitPrice = getRawProductPrice(product, subtype);
+
+      return {
+        ...item,
+        unit_price: item.is_unit_sale ? resolveCustomSalePrice(product, rawUnitPrice, true) : rawUnitPrice,
+      };
     }));
-  }, [products]);
-
-  // Change pricing subtype for a single item
-  const changeItemSubtype = useCallback((index: number, subtype: string) => {
-    setItems(prev => prev.map((item, i) => {
-      if (i !== index) return item;
-      const product = products.find(p => p.id === item.product_id);
-      if (!product) return { ...item, item_subtype: subtype };
-      let newUnitPrice: number;
-      if (subtype === 'invoice') {
-        newUnitPrice = Number(product.price_invoice || 0);
-      } else {
-        switch (subtype) {
-          case 'super_gros': newUnitPrice = Number(product.price_super_gros || product.price_no_invoice || 0); break;
-          case 'retail': newUnitPrice = Number(product.price_retail || 0); break;
-          default: newUnitPrice = Number(product.price_gros || product.price_no_invoice || 0); break;
-        }
-      }
-
-      const adjustedUnitPrice = item.is_unit_sale
-        ? newUnitPrice / Math.max(1, item.pieces_per_box)
-        : newUnitPrice;
-
-      return { ...item, unit_price: adjustedUnitPrice, item_subtype: subtype };
-    }));
-  }, [products]);
+  }, [getRawProductPrice, products, resolveCustomSalePrice]);
 
   const workerChanged = assignedWorkerId !== (order.assigned_worker_id || '');
   const deliveryDateChanged = (() => {
@@ -378,19 +513,146 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   const invoiceMethodChanged = (invoicePaymentMethod || null) !== (order.invoice_payment_method || null);
   const originalPriceSubType = ((orderItems[0] as any)?.price_subtype || order.customer?.default_price_subtype || 'gros') as string;
   const priceSubTypeChanged = paymentType === 'without_invoice' && priceSubType !== originalPriceSubType;
-  const originalPaidAmount = Number((order as any).paid_amount || order.total_amount || 0);
-  const originalRemainingAmount = Number((order as any).remaining_amount || 0);
+  const originalPaymentSnapshot = resolveOrderPaymentSnapshot(order);
+  const originalPaidAmount = originalPaymentSnapshot.paidAmount;
+  const originalRemainingAmount = originalPaymentSnapshot.remainingAmount;
   const paymentAmountChanged = order.status === 'delivered' && (adjustPaidAmount !== originalPaidAmount || adjustRemainingAmount !== originalRemainingAmount);
 
-  const hasItemSubtypeChanges = items.some(i => i.item_subtype !== undefined);
+  const hasItemSubtypeChanges = items.some((item) => (item.item_subtype || undefined) !== (item.original_item_subtype || undefined));
+  const hasPriceChanges = items.some((item) => item.unit_price !== item.original_unit_price);
+  const hasGiftPieceChanges = items.some((item) => (item.gift_pieces || 0) !== (item.original_gift_pieces || 0));
 
   const hasChanges = items.some(i => i.new_quantity !== i.original_quantity) ||
-    items.some(i => !i.id && i.new_quantity > 0) || workerChanged || deliveryDateChanged || paymentTypeChanged || invoiceMethodChanged || priceSubTypeChanged || paymentAmountChanged || hasItemSubtypeChanges;
+    items.some(i => !i.id && i.new_quantity > 0) ||
+    workerChanged ||
+    deliveryDateChanged ||
+    paymentTypeChanged ||
+    invoiceMethodChanged ||
+    priceSubTypeChanged ||
+    paymentAmountChanged ||
+    hasItemSubtypeChanges ||
+    hasPriceChanges ||
+    hasGiftPieceChanges;
 
-  const getBoxPrice = useCallback((item: ModifiedItem) => {
+  const getBoxEquivalentPrice = useCallback((item: ModifiedItem) => {
+    if (item.is_unit_sale) return item.unit_price * Math.max(1, item.pieces_per_box);
     const multiplier = getBoxMultiplier(item.pricing_unit, item.weight_per_box, item.pieces_per_box);
     return item.unit_price * multiplier;
   }, []);
+
+  const getDisplayUnitPrice = useCallback((item: ModifiedItem) => {
+    return item.is_unit_sale ? item.unit_price : getBoxEquivalentPrice(item);
+  }, [getBoxEquivalentPrice]);
+
+  const isMissingSchemaColumnError = useCallback((error: any, table: string, column: string) => {
+    const message = String(error?.message || '');
+    return message.includes(`Could not find the '${column}' column of '${table}'`);
+  }, []);
+
+  const updateOrderItemWithFallback = useCallback(async (itemId: string, payload: Record<string, any>) => {
+    let { error } = await supabase.from('order_items').update(payload).eq('id', itemId);
+
+    if (error && isMissingSchemaColumnError(error, 'order_items', 'gift_pieces')) {
+      const { gift_pieces, ...fallbackPayload } = payload;
+      ({ error } = await supabase.from('order_items').update(fallbackPayload).eq('id', itemId));
+    }
+
+    if (error) {
+      throw error;
+    }
+  }, [isMissingSchemaColumnError]);
+
+  const insertOrderItemWithFallback = useCallback(async (payload: Record<string, any>) => {
+    let { error } = await supabase.from('order_items').insert(payload);
+
+    if (error && isMissingSchemaColumnError(error, 'order_items', 'gift_pieces')) {
+      const { gift_pieces, ...fallbackPayload } = payload;
+      ({ error } = await supabase.from('order_items').insert(fallbackPayload));
+    }
+
+    if (error) {
+      throw error;
+    }
+  }, [isMissingSchemaColumnError]);
+
+  const syncOrderLinkedDebt = useCallback(async (targetRemainingAmount: number) => {
+    const normalizedTarget = Math.max(0, Number(targetRemainingAmount || 0));
+
+    const { data: linkedDebts, error: linkedDebtsError } = await supabase
+      .from('customer_debts')
+      .select('id, total_amount, paid_amount, remaining_amount, status, notes')
+      .eq('order_id', order.id)
+      .order('created_at', { ascending: true });
+
+    if (linkedDebtsError) {
+      throw linkedDebtsError;
+    }
+
+    const linkedDebtIds = (linkedDebts || []).map((debt) => debt.id);
+    let paidViaCollections = 0;
+
+    if (linkedDebtIds.length > 0) {
+      const { data: debtPayments, error: debtPaymentsError } = await supabase
+        .from('debt_payments')
+        .select('amount')
+        .in('debt_id', linkedDebtIds);
+
+      if (debtPaymentsError) {
+        throw debtPaymentsError;
+      }
+
+      paidViaCollections = (debtPayments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    }
+
+    const nextPaidAmount = Math.min(normalizedTarget, paidViaCollections);
+    const nextRemainingAmount = Math.max(0, normalizedTarget - nextPaidAmount);
+    const nextStatus = nextRemainingAmount <= 0 ? 'paid' : nextPaidAmount > 0 ? 'partially_paid' : 'active';
+    const linkedWorkerId = (assignedWorkerId && assignedWorkerId !== 'none')
+      ? assignedWorkerId
+      : (order.assigned_worker_id || workerId || null);
+
+    if (linkedDebts && linkedDebts.length > 0) {
+      const primaryDebt = linkedDebts[0];
+      const { error: updateDebtError } = await supabase
+        .from('customer_debts')
+        .update({
+          worker_id: linkedWorkerId,
+          branch_id: order.branch_id,
+          total_amount: normalizedTarget,
+          paid_amount: nextPaidAmount,
+          status: nextStatus,
+          notes: primaryDebt.notes || (normalizedTarget > 0
+            ? 'Order debt synced after modification'
+            : 'Order debt settled after modification'),
+        })
+        .eq('id', primaryDebt.id);
+
+      if (updateDebtError) {
+        throw updateDebtError;
+      }
+
+      return;
+    }
+
+    if (normalizedTarget > 0) {
+      const { error: insertDebtError } = await supabase
+        .from('customer_debts')
+        .insert({
+          customer_id: order.customer_id,
+          order_id: order.id,
+          worker_id: linkedWorkerId,
+          branch_id: order.branch_id,
+          total_amount: normalizedTarget,
+          paid_amount: 0,
+          status: 'active',
+          notes: 'Debt created from order modification',
+        });
+
+      if (insertDebtError) {
+        throw insertDebtError;
+      }
+    }
+  }, [assignedWorkerId, order.assigned_worker_id, order.branch_id, order.customer_id, order.id, workerId]);
 
   const originalTotal = orderItems.reduce((sum, item) => {
     const giftQty = Number((item as any).gift_quantity || 0);
@@ -454,62 +716,89 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
 
     try {
       const changes: Record<string, any>[] = [];
+      let finalOrderDebtRemaining = 0;
+
+      if (order.status === 'delivered') {
+        const { data: linkedOrderDebts, error: linkedOrderDebtsError } = await supabase
+          .from('customer_debts')
+          .select('total_amount, paid_amount, remaining_amount')
+          .eq('order_id', order.id);
+
+        if (linkedOrderDebtsError) {
+          throw new Error(`Failed to load order debt: ${linkedOrderDebtsError.message}`);
+        }
+
+        const currentLinkedDebtRemaining = (linkedOrderDebts || []).reduce((sum, debt) => {
+          const remaining = debt.remaining_amount ?? (Number(debt.total_amount || 0) - Number(debt.paid_amount || 0));
+          return sum + Number(remaining || 0);
+        }, 0);
+
+        finalOrderDebtRemaining = paymentAmountChanged ? adjustRemainingAmount : currentLinkedDebtRemaining;
+      }
 
       for (const item of items) {
-        const itemSubtype = item.item_subtype || (paymentType === 'with_invoice' ? 'invoice' : priceSubType);
+        const itemSubtype = getCurrentItemSubtype(item);
         const itemPayType = itemSubtype === 'invoice' ? 'with_invoice' : 'without_invoice';
         const itemInvMethod = itemSubtype === 'invoice' ? (invoicePaymentMethod || null) : null;
+        const itemChanged =
+          item.new_quantity !== item.original_quantity ||
+          (item.gift_quantity || 0) !== (item.original_gift_quantity || 0) ||
+          (item.gift_pieces || 0) !== (item.original_gift_pieces || 0) ||
+          itemSubtype !== (item.original_item_subtype || undefined) ||
+          item.unit_price !== item.original_unit_price;
 
-        if (item.id && (item.new_quantity !== item.original_quantity || item.item_subtype !== undefined)) {
+        if (item.id && itemChanged) {
           if (item.new_quantity === 0) {
-            // Delete the item
-            const { error: delErr } = await supabase.from('order_items').delete().eq('id', item.id);
-            if (delErr) throw new Error('فشل حذف المنتج: ' + delErr.message);
+            const { error: deleteError } = await supabase.from('order_items').delete().eq('id', item.id);
+            if (deleteError) throw new Error(`Failed to delete order item: ${deleteError.message}`);
+
             changes.push({
-              منتج: item.product_name,
-              كمية_سابقة: item.original_quantity,
-              كمية_جديدة: 0,
-              هدية_سابقة: item.original_gift_quantity || 0,
-              هدية_جديدة: 0,
-              عملية: 'حذف',
+              operation: 'delete_item',
+              product: item.product_name,
+              old_quantity: item.original_quantity,
+              new_quantity: 0,
             });
           } else {
-            // Update quantity + gift after recalculation
             const paidQty = Math.max(0, item.new_quantity - (item.gift_quantity || 0));
             const multiplier = getBoxMultiplier(item.pricing_unit, item.weight_per_box, item.pieces_per_box);
             const boxPrice = item.unit_price * multiplier;
-            const { error: updErr } = await supabase.from('order_items')
-              .update({
-                quantity: item.new_quantity,
-                gift_quantity: item.gift_quantity || 0,
-                unit_price: boxPrice,
-                total_price: paidQty * boxPrice,
-                price_subtype: itemSubtype,
-                payment_type: itemPayType,
-                invoice_payment_method: itemInvMethod,
-              })
-              .eq('id', item.id);
-            if (updErr) throw new Error('فشل تحديث المنتج: ' + updErr.message);
+
+            await updateOrderItemWithFallback(item.id, {
+              quantity: item.new_quantity,
+              gift_quantity: item.gift_quantity || 0,
+              gift_pieces: item.gift_pieces || 0,
+              unit_price: boxPrice,
+              total_price: paidQty * boxPrice,
+              price_subtype: itemSubtype,
+              payment_type: itemPayType,
+              invoice_payment_method: itemInvMethod,
+            });
+
             changes.push({
-              منتج: item.product_name,
-              كمية_سابقة: item.original_quantity,
-              كمية_جديدة: item.new_quantity,
-              هدية_سابقة: item.original_gift_quantity || 0,
-              هدية_جديدة: item.gift_quantity || 0,
-              تسعير: itemSubtype,
-              عملية: item.item_subtype ? 'تعديل تسعير' : 'تعديل كمية',
+              operation: itemSubtype !== (item.original_item_subtype || undefined) || item.unit_price !== item.original_unit_price
+                ? 'edit_item'
+                : 'edit_quantity',
+              product: item.product_name,
+              old_quantity: item.original_quantity,
+              new_quantity: item.new_quantity,
+              old_gift_boxes: item.original_gift_quantity || 0,
+              new_gift_boxes: item.gift_quantity || 0,
+              old_gift_pieces: item.original_gift_pieces || 0,
+              new_gift_pieces: item.gift_pieces || 0,
+              price_subtype: itemSubtype,
             });
           }
         } else if (!item.id && item.new_quantity > 0) {
-          // New product added
           const paidQty = Math.max(0, item.new_quantity - (item.gift_quantity || 0));
           const multiplier = getBoxMultiplier(item.pricing_unit, item.weight_per_box, item.pieces_per_box);
           const boxPrice = item.unit_price * multiplier;
-          const { error: insErr } = await supabase.from('order_items').insert({
+
+          await insertOrderItemWithFallback({
             order_id: order.id,
             product_id: item.product_id,
             quantity: item.new_quantity,
             gift_quantity: item.gift_quantity || 0,
+            gift_pieces: item.gift_pieces || 0,
             unit_price: boxPrice,
             total_price: paidQty * boxPrice,
             pricing_unit: item.pricing_unit,
@@ -519,18 +808,18 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             payment_type: itemPayType,
             invoice_payment_method: itemInvMethod,
           });
-          if (insErr) throw new Error('فشل إضافة المنتج: ' + insErr.message);
+
           changes.push({
-            منتج: item.product_name,
-            كمية: item.new_quantity,
-            هدية: item.gift_quantity || 0,
-            تسعير: itemSubtype,
-            عملية: 'إضافة جديد',
+            operation: 'add_item',
+            product: item.product_name,
+            quantity: item.new_quantity,
+            gift_boxes: item.gift_quantity || 0,
+            gift_pieces: item.gift_pieces || 0,
+            price_subtype: itemSubtype,
           });
         }
       }
 
-      // Recalculate total (paid qty only, with box multiplier)
       const { data: updatedItems } = await supabase
         .from('order_items')
         .select('quantity, unit_price, gift_quantity, pricing_unit, weight_per_box, pieces_per_box')
@@ -538,47 +827,51 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
 
       const newTotal = updatedItems?.reduce((sum, i: any) => {
         const paidQty = Math.max(0, Number(i.quantity) - Number(i.gift_quantity || 0));
-        // unit_price in DB is already the box price, no need to multiply again
         return sum + (paidQty * Number(i.unit_price || 0));
       }, 0) || 0;
 
       const orderUpdate: Record<string, any> = {};
       if (newTotal > 0) orderUpdate.total_amount = newTotal;
 
-      // Update assigned worker if changed
       if (workerChanged) {
         const newWorker = assignedWorkerId && assignedWorkerId !== 'none' ? assignedWorkerId : null;
         orderUpdate.assigned_worker_id = newWorker;
         if (newWorker && order.status === 'pending') {
           orderUpdate.status = 'assigned';
         }
-        changes.push({ عملية: 'تغيير عامل التوصيل' });
+        changes.push({ operation: 'change_delivery_worker' });
       }
 
-      // Update delivery date if changed
       if (deliveryDateChanged) {
         orderUpdate.delivery_date = deliveryDate ? format(deliveryDate, 'yyyy-MM-dd') : null;
-        changes.push({ عملية: 'تغيير تاريخ التوصيل', تاريخ_جديد: deliveryDate ? format(deliveryDate, 'yyyy-MM-dd') : 'بدون' });
+        changes.push({ operation: 'change_delivery_date', new_date: deliveryDate ? format(deliveryDate, 'yyyy-MM-dd') : null });
       }
 
-      // Update payment type / pricing tier if changed
       if (paymentTypeChanged || invoiceMethodChanged || priceSubTypeChanged) {
         orderUpdate.payment_type = paymentType;
         orderUpdate.invoice_payment_method = paymentType === 'with_invoice' ? (invoicePaymentMethod || null) : null;
-        changes.push({ عملية: 'تغيير طريقة الدفع', نوع: paymentType, طريقة_فرعية: invoicePaymentMethod || 'بدون', تسعير: priceSubType });
+        changes.push({
+          operation: 'change_payment_setup',
+          payment_type: paymentType,
+          invoice_payment_method: invoicePaymentMethod || null,
+          price_subtype: priceSubType,
+        });
 
-        // Update price_subtype AND recalculated prices on all order items
         const newSubtype = paymentType === 'with_invoice' ? 'invoice' : priceSubType;
         for (const item of items) {
-          if (!item.id) continue; // new items handled separately
+          if (!item.id) continue;
+          const effectiveSubtype = item.item_subtype || newSubtype;
+          const effectivePaymentType = effectiveSubtype === 'invoice' ? 'with_invoice' : 'without_invoice';
+          const effectiveInvoiceMethod = effectiveSubtype === 'invoice' ? (invoicePaymentMethod || null) : null;
           const paidQty = Math.max(0, item.new_quantity - (item.gift_quantity || 0));
           const multiplier = getBoxMultiplier(item.pricing_unit, item.weight_per_box, item.pieces_per_box);
           const boxPrice = item.unit_price * multiplier;
+
           await supabase.from('order_items')
-            .update({ 
-              price_subtype: newSubtype,
-              payment_type: paymentType,
-              invoice_payment_method: paymentType === 'with_invoice' ? (invoicePaymentMethod || null) : null,
+            .update({
+              price_subtype: effectiveSubtype,
+              payment_type: effectivePaymentType,
+              invoice_payment_method: effectiveInvoiceMethod,
               unit_price: boxPrice,
               total_price: paidQty * boxPrice,
             })
@@ -586,9 +879,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         }
       }
 
-      // Update paid/remaining amounts for delivered orders using partial_amount + payment_status
       if (paymentAmountChanged) {
-        // Map to actual DB columns
         if (adjustRemainingAmount <= 0) {
           orderUpdate.payment_status = 'cash';
           orderUpdate.partial_amount = null;
@@ -599,99 +890,25 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
           orderUpdate.payment_status = 'partial';
           orderUpdate.partial_amount = adjustPaidAmount;
         }
+
         changes.push({
-          عملية: 'تعديل المبلغ المدفوع',
-          مدفوع_سابق: originalPaidAmount,
-          مدفوع_جديد: adjustPaidAmount,
-          متبقي_سابق: originalRemainingAmount,
-          متبقي_جديد: adjustRemainingAmount,
+          operation: 'edit_payment_amount',
+          old_paid: originalPaidAmount,
+          new_paid: adjustPaidAmount,
+          old_remaining: originalRemainingAmount,
+          new_remaining: adjustRemainingAmount,
         });
 
-        // Handle debt changes from payment adjustment
-        const debtIncrease = adjustRemainingAmount - originalRemainingAmount;
-        if (debtIncrease > 0) {
-          // More remaining = new/increased debt
-          // Check if there's already a debt for this order
-          const { data: existingDebt } = await supabase
-            .from('customer_debts')
-            .select('id, total_amount, paid_amount, remaining_amount')
-            .eq('order_id', order.id)
-            .in('status', ['active', 'partially_paid'])
-            .maybeSingle();
-
-          if (existingDebt) {
-            const newDebtTotal = Number(existingDebt.total_amount) + debtIncrease;
-            const newDebtRemaining = (existingDebt.remaining_amount ?? (existingDebt.total_amount - existingDebt.paid_amount)) + debtIncrease;
-            await supabase.from('customer_debts').update({
-              total_amount: newDebtTotal,
-              remaining_amount: newDebtRemaining,
-              notes: `تعديل دفع بعد التوصيل - زيادة ${debtIncrease.toLocaleString()} دج`,
-            }).eq('id', existingDebt.id);
-          } else {
-            await supabase.from('customer_debts').insert({
-              customer_id: order.customer_id,
-              order_id: order.id,
-              worker_id: workerId,
-              branch_id: order.branch_id,
-              total_amount: debtIncrease,
-              paid_amount: 0,
-              remaining_amount: debtIncrease,
-              status: 'active',
-              notes: 'دين من تعديل الدفع بعد التوصيل',
-            });
-          }
-        } else if (debtIncrease < 0) {
-          // Less remaining = debt reduced/cleared
-          const debtReduction = Math.abs(debtIncrease);
-          let remaining = debtReduction;
-
-          const { data: debts } = await supabase
-            .from('customer_debts')
-            .select('id, total_amount, paid_amount, remaining_amount')
-            .eq('customer_id', order.customer_id)
-            .in('status', ['active', 'partially_paid'])
-            .order('created_at', { ascending: true });
-
-          for (const debt of (debts || [])) {
-            if (remaining <= 0) break;
-            const debtRemaining = (debt.remaining_amount ?? (debt.total_amount - debt.paid_amount));
-            const deduct = Math.min(debtRemaining, remaining);
-            const newPaid = debt.paid_amount + deduct;
-            const newRemaining = debt.total_amount - newPaid;
-            await supabase.from('customer_debts').update({
-              paid_amount: newPaid,
-              remaining_amount: newRemaining,
-              status: newRemaining <= 0 ? 'paid' : 'partially_paid',
-            }).eq('id', debt.id);
-            remaining -= deduct;
-          }
-
-          // If there's still surplus, create customer credit
-          if (remaining > 0) {
-            await supabase.from('customer_credits').insert({
-              customer_id: order.customer_id,
-              order_id: order.id,
-              worker_id: workerId!,
-              branch_id: order.branch_id,
-              amount: remaining,
-              credit_type: 'financial',
-              status: 'approved',
-              approved_by: workerId,
-              approved_at: new Date().toISOString(),
-              notes: 'فائض من تعديل الدفع بعد التوصيل',
-            });
-          }
-        }
+        finalOrderDebtRemaining = adjustRemainingAmount;
       }
 
       if (Object.keys(orderUpdate).length > 0) {
         const { error: orderErr } = await supabase.from('orders')
           .update(orderUpdate)
           .eq('id', order.id);
-        if (orderErr) throw new Error('فشل تحديث الطلبية: ' + orderErr.message);
+        if (orderErr) throw new Error(`Failed to update order: ${orderErr.message}`);
       }
 
-      // Update worker_stock for delivered orders when quantities change
       if (order.status === 'delivered' && order.assigned_worker_id) {
         for (const item of items) {
           const qtyDiff = item.new_quantity - item.original_quantity;
@@ -705,13 +922,11 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             .maybeSingle();
 
           if (ws) {
-            // qtyDiff > 0 means increase (deduct from truck), qtyDiff < 0 means decrease (return to truck)
             const newStockQty = Math.max(0, ws.quantity - qtyDiff);
             await supabase.from('worker_stock')
               .update({ quantity: newStockQty })
               .eq('id', ws.id);
           } else if (qtyDiff < 0) {
-            // Item was reduced but no stock record exists - create one with returned qty
             await supabase.from('worker_stock').insert({
               worker_id: order.assigned_worker_id,
               product_id: item.product_id,
@@ -722,13 +937,11 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         }
       }
 
-      // Handle post-delivery payment difference
       const totalDiff = orderTotal - originalTotal;
       if (order.status === 'delivered' && totalDiff !== 0 && diffPaymentType) {
         if (totalDiff > 0) {
-          // INCREASE: customer owes more
           let remainingDiff = totalDiff;
-          
+
           if (diffPaymentType === 'partial' && paidAmount) {
             remainingDiff = totalDiff - paidAmount;
           } else if (diffPaymentType === 'full') {
@@ -736,7 +949,6 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
           }
 
           if (remainingDiff > 0) {
-            // Check customer credits first
             const { data: credits } = await supabase
               .from('customer_credits')
               .select('id, amount')
@@ -746,51 +958,45 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
               .eq('credit_type', 'financial')
               .order('created_at', { ascending: true });
 
-            let creditDeducted = 0;
             for (const credit of (credits || [])) {
               if (remainingDiff <= 0) break;
-              const deduct = Math.min(credit.amount, remainingDiff);
-              if (deduct >= credit.amount) {
-                await supabase.from('customer_credits').update({ is_used: true, used_at: new Date().toISOString(), used_in_order_id: order.id }).eq('id', credit.id);
+              const deduct = Math.min(Number(credit.amount || 0), remainingDiff);
+              if (deduct >= Number(credit.amount || 0)) {
+                await supabase.from('customer_credits').update({
+                  is_used: true,
+                  used_at: new Date().toISOString(),
+                  used_in_order_id: order.id,
+                }).eq('id', credit.id);
               } else {
-                await supabase.from('customer_credits').update({ amount: credit.amount - deduct }).eq('id', credit.id);
+                await supabase.from('customer_credits').update({
+                  amount: Number(credit.amount || 0) - deduct,
+                }).eq('id', credit.id);
               }
               remainingDiff -= deduct;
-              creditDeducted += deduct;
             }
 
-            // Remainder becomes debt
-            if (remainingDiff > 0) {
-              await supabase.from('customer_debts').insert({
-                customer_id: order.customer_id,
-                order_id: order.id,
-                worker_id: workerId,
-                branch_id: order.branch_id,
-                total_amount: remainingDiff,
-                paid_amount: 0,
-                status: 'active',
-                notes: creditDeducted > 0 
-                  ? `فارق تعديل طلبية بعد التوصيل (تم خصم ${creditDeducted.toLocaleString()} دج من رصيد العميل)`
-                  : 'فارق تعديل طلبية بعد التوصيل',
-              });
+            if (!paymentAmountChanged) {
+              finalOrderDebtRemaining += remainingDiff;
             }
           }
         } else {
-          // DECREASE: customer is owed money (totalDiff < 0)
           const refundAmount = Math.abs(totalDiff);
           let remainingRefund = refundAmount;
 
+          if (!paymentAmountChanged) {
+            finalOrderDebtRemaining = Math.max(0, finalOrderDebtRemaining - refundAmount);
+          }
+
           if (diffPaymentType === 'full') {
-            remainingRefund = 0; // Refunded in cash
+            remainingRefund = 0;
           } else if (diffPaymentType === 'partial' && paidAmount) {
             remainingRefund = refundAmount - paidAmount;
           }
 
           if (remainingRefund > 0) {
-            // Try to deduct from customer's existing debts
             const { data: debts } = await supabase
               .from('customer_debts')
-              .select('id, total_amount, paid_amount, remaining_amount')
+              .select('id, order_id, total_amount, paid_amount, remaining_amount, notes')
               .eq('customer_id', order.customer_id)
               .in('status', ['active', 'partially_paid'])
               .order('created_at', { ascending: true });
@@ -798,26 +1004,28 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             let debtDeducted = 0;
             for (const debt of (debts || [])) {
               if (remainingRefund <= 0) break;
-              const debtRemaining = (debt.remaining_amount ?? (debt.total_amount - debt.paid_amount));
+              if (debt.order_id === order.id) continue;
+
+              const debtRemaining = Number(debt.remaining_amount ?? (Number(debt.total_amount || 0) - Number(debt.paid_amount || 0)));
               const deduct = Math.min(debtRemaining, remainingRefund);
-              const newPaid = debt.paid_amount + deduct;
-              const newRemaining = debt.total_amount - newPaid;
+              const newPaid = Number(debt.paid_amount || 0) + deduct;
+              const newRemaining = Math.max(0, Number(debt.total_amount || 0) - newPaid);
+
               await supabase.from('customer_debts').update({
                 paid_amount: newPaid,
-                remaining_amount: newRemaining,
                 status: newRemaining <= 0 ? 'paid' : 'partially_paid',
-                notes: (debt as any).notes ? `${(debt as any).notes} | خصم ${deduct.toLocaleString()} دج من فارق تعديل` : `خصم ${deduct.toLocaleString()} دج من فارق تعديل`,
+                notes: debt.notes ? `${debt.notes} | Adjustment deduction ${deduct}` : `Adjustment deduction ${deduct}`,
               }).eq('id', debt.id);
+
               remainingRefund -= deduct;
               debtDeducted += deduct;
             }
 
-            // Remainder becomes customer credit (surplus)
             if (remainingRefund > 0) {
               await supabase.from('customer_credits').insert({
                 customer_id: order.customer_id,
                 order_id: order.id,
-                worker_id: workerId!,
+                worker_id: workerId,
                 branch_id: order.branch_id,
                 amount: remainingRefund,
                 credit_type: 'financial',
@@ -825,28 +1033,30 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                 approved_by: workerId,
                 approved_at: new Date().toISOString(),
                 notes: debtDeducted > 0
-                  ? `فائض من تعديل طلبية بعد التوصيل (تم خصم ${debtDeducted.toLocaleString()} دج من ديون العميل)`
-                  : 'فائض من تعديل طلبية بعد التوصيل',
+                  ? `Surplus after order adjustment (deducted ${debtDeducted})`
+                  : 'Surplus after order adjustment',
               });
-              // Also record in surplus/deficit treasury
+
               await supabase.from('manager_treasury').insert({
-                manager_id: workerId!,
+                manager_id: workerId,
                 branch_id: order.branch_id || null,
                 source_type: 'customer_surplus',
                 payment_method: 'cash',
                 amount: remainingRefund,
                 customer_name: order.customer?.name || '',
-                notes: `فائض عميل من تعديل طلبية ${order.id.slice(0, 8)}`,
+                notes: `Customer surplus from modified order ${order.id.slice(0, 8)}`,
               });
             }
           }
         }
       }
 
-      // Update receipt if anything changed (so reprinted receipts reflect the change)
+      if (order.status === 'delivered') {
+        await syncOrderLinkedDebt(finalOrderDebtRemaining);
+      }
+
       const shouldUpdateReceipt = paymentAmountChanged || paymentTypeChanged || invoiceMethodChanged || priceSubTypeChanged || hasItemSubtypeChanges || productChanges.length > 0;
       if (shouldUpdateReceipt) {
-        // Re-fetch updated order items for receipt sync
         const { data: freshItems } = await supabase
           .from('order_items')
           .select('*, product:products(name)')
@@ -860,7 +1070,6 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         if (paymentTypeChanged || invoiceMethodChanged) {
           receiptUpdate.payment_method = paymentType === 'with_invoice' ? (invoicePaymentMethod || 'cash') : 'cash';
         }
-        // Always update receipt items and total when items/prices change
         if (freshItems && freshItems.length > 0) {
           const receiptItems = freshItems.map((fi: any) => ({
             product_id: fi.product_id,
@@ -883,17 +1092,16 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         }
       }
 
-      // Log activity
       await logActivity.mutateAsync({
         actionType: 'update',
         entityType: 'order',
         entityId: order.id,
         details: {
-          نوع_التعديل: order.status === 'delivered' ? 'تعديل بعد التوصيل' : 'تعديل أثناء التوصيل',
-          العميل: order.customer?.name,
-          التغييرات: changes,
-          ...(diffPaymentType && { طريقة_دفع_الفارق: diffPaymentType, المبلغ_المدفوع: paidAmount }),
-          ...(paymentAmountChanged && { تعديل_الدفع: { مدفوع: adjustPaidAmount, متبقي: adjustRemainingAmount } }),
+          edit_type: order.status === 'delivered' ? 'after_delivery' : 'during_delivery',
+          customer: order.customer?.name,
+          changes,
+          ...(diffPaymentType && { diff_payment_type: diffPaymentType, diff_paid_amount: paidAmount }),
+          ...(paymentAmountChanged && { payment_adjustment: { paid: adjustPaidAmount, remaining: adjustRemainingAmount } }),
         },
       });
 
@@ -927,6 +1135,11 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
   const availableProducts = products.filter(p => !items.some(i => i.product_id === p.id));
   const selectedNewProduct = products.find((p) => p.id === newProductId);
   const canToggleNewProductUnit = supportsUnitSale(selectedNewProduct);
+  const editingItem = useMemo(() => {
+    if (!editingTargetProductId) return null;
+    return items.find((item) => item.product_id === editingTargetProductId) || null;
+  }, [editingTargetProductId, items]);
+  const editingSubtype = editingItem ? getCurrentItemSubtype(editingItem) : (paymentType === 'with_invoice' ? 'invoice' : priceSubType);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -942,7 +1155,17 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
           <div className="space-y-3">
             {/* Customer info */}
             <div className="bg-muted/50 rounded-lg p-2 text-sm">
-              <span className="font-bold">{order.customer?.name}</span>
+              <CustomerSummary
+                customer={{
+                  name: order.customer?.name,
+                  store_name: order.customer?.store_name,
+                  customer_type: order.customer?.customer_type,
+                  sector_name: (order.customer as any)?.sector?.name,
+                  phone: order.customer?.phone,
+                  wilaya: order.customer?.wilaya,
+                }}
+                avatarSize="sm"
+              />
             </div>
 
             {/* Assign delivery worker */}
@@ -960,13 +1183,13 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
               <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
                 <CalendarDays className="w-3.5 h-3.5" />
-                تاريخ التوصيل
+                {t('orders.delivery_date')}
               </label>
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" className={cn("w-full justify-start text-start h-9", !deliveryDate && "text-muted-foreground")}>
                     <CalendarDays className="w-4 h-4 me-2" />
-                    {deliveryDate ? format(deliveryDate, 'yyyy-MM-dd') : 'بدون تاريخ'}
+                    {deliveryDate ? format(deliveryDate, 'yyyy-MM-dd') : t('deliveries.no_date')}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0 z-[10060]" align="start">
@@ -981,7 +1204,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
               </Popover>
               {deliveryDate && (
                 <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={() => setDeliveryDate(undefined)}>
-                  إزالة التاريخ
+                  {dialogText.removeDate}
                 </Button>
               )}
             </div>
@@ -990,7 +1213,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             <div className="border rounded-lg p-3 space-y-3 bg-muted/30">
               <label className="text-xs font-medium text-muted-foreground flex items-center gap-1">
                 <CreditCard className="w-3.5 h-3.5" />
-                طريقة الدفع
+                {t('orders.payment_method')}
               </label>
               <div className="grid grid-cols-2 gap-2">
                 <Button
@@ -999,7 +1222,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                   className={`h-10 text-sm font-bold ${paymentType === 'with_invoice' ? '' : 'opacity-60'}`}
                   onClick={() => { setPaymentType('with_invoice'); recalcItemPrices('with_invoice', priceSubType); }}
                 >
-                  بفاتورة
+                  {t('orders.with_invoice')}
                 </Button>
                 <Button
                   type="button"
@@ -1007,7 +1230,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                   className={`h-10 text-sm font-bold ${paymentType === 'without_invoice' ? '' : 'opacity-60'}`}
                   onClick={() => { setPaymentType('without_invoice'); setInvoicePaymentMethod(null); recalcItemPrices('without_invoice', priceSubType); }}
                 >
-                  بدون فاتورة
+                  {t('orders.without_invoice')}
                 </Button>
               </div>
               {paymentType === 'without_invoice' && (
@@ -1015,7 +1238,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                   {([
                     { value: 'super_gros' as PriceSubType, label: 'Super Gros', colors: { active: 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600 ring-2 ring-indigo-400', inactive: 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600' } },
                     { value: 'gros' as PriceSubType, label: 'Gros', colors: { active: 'bg-cyan-600 hover:bg-cyan-700 text-white border-cyan-600 ring-2 ring-cyan-400', inactive: 'bg-cyan-600 hover:bg-cyan-700 text-white border-cyan-600' } },
-                    { value: 'retail' as PriceSubType, label: 'Détail', colors: { active: 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 ring-2 ring-rose-400', inactive: 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600' } },
+                    { value: 'retail' as PriceSubType, label: dialogText.detail, colors: { active: 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600 ring-2 ring-rose-400', inactive: 'bg-rose-600 hover:bg-rose-700 text-white border-rose-600' } },
                   ]).map((option) => (
                     <Button
                       key={option.value}
@@ -1043,14 +1266,14 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
               <div className="border rounded-lg p-3 space-y-3 bg-amber-50/50 dark:bg-amber-950/20 border-amber-200 dark:border-amber-800">
                 <label className="text-xs font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1">
                   <Banknote className="w-3.5 h-3.5" />
-                  تعديل المبلغ المدفوع / المتبقي
+                  {dialogText.adjustPaymentTitle}
                 </label>
                 <p className="text-[10px] text-amber-700 dark:text-amber-400">
-                  إذا لم يدفع العميل أو دفع جزئياً بعد التسليم، عدّل المبالغ هنا وسيتم تحديث الديون والوصل تلقائياً.
+                  {dialogText.adjustPaymentDescription}
                 </p>
                 <div className="grid grid-cols-2 gap-2">
                   <div className="space-y-1">
-                    <label className="text-[10px] text-muted-foreground">المبلغ المدفوع</label>
+                    <label className="text-[10px] text-muted-foreground">{t('orders.paid_amount')}</label>
                     <Input
                       type="number"
                       value={adjustPaidAmount}
@@ -1064,7 +1287,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                     />
                   </div>
                   <div className="space-y-1">
-                    <label className="text-[10px] text-muted-foreground">المبلغ المتبقي (دين)</label>
+                    <label className="text-[10px] text-muted-foreground">{dialogText.remainingDebtLabel}</label>
                     <Input
                       type="number"
                       value={adjustRemainingAmount}
@@ -1082,27 +1305,27 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
                 <div className="flex gap-1.5 flex-wrap">
                   <Button type="button" variant="outline" size="sm" className="h-7 text-[10px] px-2"
                     onClick={() => { setAdjustPaidAmount(orderTotal || Number(order.total_amount)); setAdjustRemainingAmount(0); }}>
-                    دفع كامل
+                    {t('debts.full_payment')}
                   </Button>
                   <Button type="button" variant="outline" size="sm" className="h-7 text-[10px] px-2"
                     onClick={() => { setAdjustPaidAmount(0); setAdjustRemainingAmount(orderTotal || Number(order.total_amount)); }}>
-                    بدون دفع (دين)
+                    {dialogText.noPaymentDebt}
                   </Button>
                   <Button type="button" variant="outline" size="sm" className="h-7 text-[10px] px-2"
                     onClick={() => { const half = Math.round((orderTotal || Number(order.total_amount)) / 2); setAdjustPaidAmount(half); setAdjustRemainingAmount((orderTotal || Number(order.total_amount)) - half); }}>
-                    نصف المبلغ
+                    {dialogText.halfAmount}
                   </Button>
                 </div>
                 {paymentAmountChanged && (
                   <div className="bg-amber-100 dark:bg-amber-900/30 rounded-md p-2 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-1.5">
                     <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-bold">سيتم تحديث:</p>
+                      <p className="font-bold">{dialogText.willUpdate}</p>
                       <ul className="list-disc list-inside text-[10px] mt-0.5 space-y-0.5">
-                        <li>المبلغ المدفوع: {originalPaidAmount.toLocaleString()} → {adjustPaidAmount.toLocaleString()} دج</li>
-                        <li>المبلغ المتبقي: {originalRemainingAmount.toLocaleString()} → {adjustRemainingAmount.toLocaleString()} دج</li>
-                        {adjustRemainingAmount > originalRemainingAmount && <li className="text-red-700">سيتم إنشاء/تحديث دين بقيمة {(adjustRemainingAmount - originalRemainingAmount).toLocaleString()} دج</li>}
-                        {adjustRemainingAmount < originalRemainingAmount && <li className="text-green-700">سيتم تسوية ديون بقيمة {(originalRemainingAmount - adjustRemainingAmount).toLocaleString()} دج</li>}
+                        <li>{dialogText.paidAmount}: {originalPaidAmount.toLocaleString()} {'->'} {adjustPaidAmount.toLocaleString()} {dialogText.currency}</li>
+                        <li>{dialogText.remainingAmount}: {originalRemainingAmount.toLocaleString()} {'->'} {adjustRemainingAmount.toLocaleString()} {dialogText.currency}</li>
+                        {adjustRemainingAmount > originalRemainingAmount && <li className="text-red-700">{dialogText.createDebt} {(adjustRemainingAmount - originalRemainingAmount).toLocaleString()} {dialogText.currency}</li>}
+                        {adjustRemainingAmount < originalRemainingAmount && <li className="text-green-700">{dialogText.settleDebt} {(originalRemainingAmount - adjustRemainingAmount).toLocaleString()} {dialogText.currency}</li>}
                       </ul>
                     </div>
                   </div>
@@ -1111,95 +1334,109 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
             )}
 
             {items.map((item, index) => {
-              const changed = item.new_quantity !== item.original_quantity;
+              const changed = item.new_quantity !== item.original_quantity || item.unit_price !== item.original_unit_price;
+              const product = getProductById(item.product_id);
+              const imgUrl = product?.image_url || (orderItems.find((orderItem) => orderItem.product_id === item.product_id)?.product as any)?.image_url;
+              const paidQty = getPaidQuantity(item);
+              const displayUnitPrice = getDisplayUnitPrice(item);
+              const currentSubtype = getCurrentItemSubtype(item);
+              const subtypeLabel = currentSubtype === 'invoice'
+                ? 'F1'
+                : currentSubtype === 'super_gros'
+                  ? 'SG'
+                  : currentSubtype === 'retail'
+                    ? 'D'
+                    : 'G';
               return (
-                <div key={item.product_id} className={`border rounded-lg p-3 space-y-2 ${changed ? 'border-primary/50 bg-primary/5' : ''}`}>
-                    <div className="flex items-center justify-between">
-                      {(() => {
-                        const product = products.find(p => p.id === item.product_id);
-                        const imgUrl = product?.image_url || (orderItems.find(oi => oi.product_id === item.product_id)?.product as any)?.image_url;
-                        return imgUrl ? (
-                          <img src={imgUrl} alt={item.product_name} className="w-10 h-10 rounded-md object-cover flex-shrink-0" />
-                        ) : null;
-                      })()}
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-medium text-sm">{item.product_name}</span>
-                          {item.is_unit_sale && (
+                <div
+                  key={item.product_id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => openItemEditor(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openItemEditor(item);
+                    }
+                  }}
+                  className={`rounded-xl border p-3 transition-colors ${
+                    item.new_quantity === 0
+                      ? 'border-destructive/20 bg-destructive/5 opacity-60'
+                      : changed
+                        ? 'border-primary/40 bg-primary/5'
+                        : 'border-border bg-card hover:border-primary/35'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="h-16 w-16 overflow-hidden rounded-xl border bg-muted/40 shrink-0">
+                      {imgUrl ? (
+                        <img src={imgUrl} alt={item.product_name} className="h-full w-full object-cover" loading="lazy" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground">
+                          {dialogText.noImage}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="font-semibold text-sm truncate block">{item.product_name}</span>
                             <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              {t('offers.unit_piece')}
+                              {subtypeLabel}
                             </Badge>
-                          )}
-                          {item.gift_quantity > 0 && (
-                            <Badge className="bg-pink-100 text-pink-700 dark:bg-pink-950/40 dark:text-pink-300 text-[10px] px-1.5 py-0 gap-0.5">
-                              <Gift className="w-3 h-3" />
-                              عرض {item.gift_quantity}
-                            </Badge>
+                            {item.is_unit_sale && (
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                                {t('offers.unit_piece')}
+                              </Badge>
+                            )}
+                            {(item.gift_quantity || 0) > 0 && (
+                              <Badge className="bg-pink-100 text-pink-700 dark:bg-pink-950/40 dark:text-pink-300 text-[10px] px-1.5 py-0 gap-0.5">
+                                <Gift className="w-3 h-3" />
+                                {dialogText.gift} {item.gift_quantity}
+                              </Badge>
+                            )}
+                              {item.id && changed && (
+                                <Badge variant="secondary" className="text-[10px]">
+                                  {`${item.original_quantity} -> ${item.new_quantity}`}
+                                </Badge>
+                              )}
+                            {!item.id && (
+                              <Badge className="bg-green-100 text-green-800 text-[10px]">{dialogText.newItem}</Badge>
+                            )}
+                          </div>
+                          {displayUnitPrice > 0 && (
+                            <p className="text-xs text-muted-foreground">
+                              {displayUnitPrice.toLocaleString()} DA x {paidQty} = {(displayUnitPrice * paidQty).toLocaleString()} DA
+                              {(item.gift_quantity || 0) > 0 ? ` (${paidQty} + ${item.gift_quantity} gift = ${item.new_quantity})` : ''}
+                            </p>
                           )}
                         </div>
-                        {item.unit_price > 0 && (() => {
-                          const boxPrice = getBoxPrice(item);
-                          const paidQty = getPaidQuantity(item);
-                          return (
-                          <p className="text-xs text-muted-foreground">
-                            {boxPrice.toLocaleString()} دج × {paidQty} = {(boxPrice * paidQty).toLocaleString()} دج
-                            {item.gift_quantity > 0 ? ` (${paidQty} + ${item.gift_quantity} عرض = ${item.new_quantity})` : ''}
-                          </p>
-                          );
-                        })()}
-                      </div>
-                    {!item.id && (
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => removeNewItem(index)}>
-                        <Trash2 className="w-3 h-3 text-destructive" />
-                      </Button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(index, -1)}>
-                      <Minus className="w-3 h-3" />
-                    </Button>
-                    <Input
-                      type="number"
-                      value={getPaidQuantity(item)}
-                      onChange={(e) => setQuantity(index, e.target.value)}
-                      className="h-8 w-20 text-center"
-                      min={0}
-                    />
-                    <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => updateQuantity(index, 1)}>
-                      <Plus className="w-3 h-3" />
-                    </Button>
-                    {item.id && changed && (
-                      <Badge variant="secondary" className="text-xs">
-                        {item.original_quantity} → {item.new_quantity}
-                      </Badge>
-                    )}
-                    {!item.id && (
-                      <Badge className="bg-green-100 text-green-800 text-xs">{t('common.new')}</Badge>
-                    )}
-                  </div>
-                  {/* Per-item pricing subtype override */}
-                  <div className="flex items-center gap-1 flex-wrap">
-                    {([
-                      { value: 'invoice', label: 'F1', color: 'bg-blue-600 text-white border-blue-600' },
-                      { value: 'super_gros', label: 'SG', color: 'bg-indigo-600 text-white border-indigo-600' },
-                      { value: 'gros', label: 'G', color: 'bg-cyan-600 text-white border-cyan-600' },
-                      { value: 'retail', label: 'D', color: 'bg-rose-600 text-white border-rose-600' },
-                    ]).map((opt) => {
-                      const currentSubtype = item.item_subtype || (paymentType === 'with_invoice' ? 'invoice' : priceSubType);
-                      const isActive = currentSubtype === opt.value;
-                      return (
                         <Button
-                          key={opt.value}
                           type="button"
-                          variant="outline"
-                          size="sm"
-                          className={`h-6 px-2 text-[10px] font-bold transition-all ${isActive ? `${opt.color} ring-1 ring-offset-1` : `${opt.color} opacity-30`}`}
-                          onClick={() => changeItemSubtype(index, opt.value)}
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 rounded-full text-destructive hover:text-destructive"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleRemoveItem(item.product_id);
+                          }}
                         >
-                          {opt.label}
+                          <XCircle className="w-4 h-4" />
                         </Button>
-                      );
-                    })}
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col items-start min-w-12">
+                          <span className="text-[11px] text-muted-foreground">
+                            {item.is_unit_sale ? (t('orders.quantity_pieces') || 'Pieces') : (t('orders.quantity_boxes') || 'Boxes')}
+                          </span>
+                          <span className="font-bold text-sm">{paidQty}</span>
+                        </div>
+                        <div className="text-[11px] text-muted-foreground text-end">
+                          {t('orders.tap_product_to_edit') || 'Tap the product to edit'}
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               );
@@ -1225,7 +1462,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
               </div>
               {canToggleNewProductUnit && (
                 <div className="space-y-1">
-                  <p className="text-[11px] text-muted-foreground">وحدة إضافة المنتج</p>
+                  <p className="text-[11px] text-muted-foreground">{dialogText.addProductUnit}</p>
                   <div className="grid grid-cols-2 gap-2">
                     <Button
                       type="button"
@@ -1257,7 +1494,7 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
           {orderTotal > 0 && (
             <div className="flex items-center justify-between text-sm font-bold">
               <span>{t('orders.grand_total')}:</span>
-              <span className="text-primary">{orderTotal.toLocaleString()} دج</span>
+              <span className="text-primary">{orderTotal.toLocaleString()} {dialogText.currency}</span>
             </div>
           )}
           <Button
@@ -1277,6 +1514,46 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
         </div>
       </DialogContent>
 
+      <ProductQuantityDialog
+        open={showQuantityDialog}
+        onOpenChange={(openState) => {
+          setShowQuantityDialog(openState);
+          if (!openState) {
+            setSelectedProduct(null);
+            setEditingTargetProductId(null);
+            setEditingInitialGiftOfferId(undefined);
+          }
+        }}
+        product={selectedProduct}
+        onConfirm={handleEditProductWithQuantity}
+        unitPrice={
+          editingItem
+            ? getBoxEquivalentPrice(editingItem)
+            : selectedProduct
+              ? resolveCustomSalePrice(selectedProduct, getRawProductPrice(selectedProduct, editingSubtype), false)
+              : 0
+        }
+        unitPiecePrice={
+          editingItem
+            ? (editingItem.is_unit_sale
+              ? editingItem.unit_price
+              : getBoxEquivalentPrice(editingItem) / Math.max(1, editingItem.pieces_per_box))
+            : selectedProduct
+              ? resolveCustomSalePrice(selectedProduct, getRawProductPrice(selectedProduct, editingSubtype), true)
+              : 0
+        }
+        defaultPaymentType={editingSubtype === 'invoice' ? 'with_invoice' : 'without_invoice'}
+        defaultPriceSubType={editingSubtype === 'invoice' ? priceSubType : (editingSubtype as PriceSubType)}
+        defaultInvoicePaymentMethod={editingSubtype === 'invoice' ? invoicePaymentMethod : null}
+        mode="edit"
+        initialQuantity={editingInitialQuantity}
+        initialGiftPieces={editingInitialGiftPieces}
+        initialGiftOfferId={editingInitialGiftOfferId}
+        initialOfferApplied={editingInitialOfferApplied}
+        initialIsUnitSale={editingInitialIsUnitSale}
+        initialCustomUnitPrice={editingInitialCustomUnitPrice}
+      />
+
       {/* Post-delivery confirmation dialog */}
       <PostDeliveryConfirmDialog
         open={showConfirmDialog}
@@ -1295,3 +1572,4 @@ const ModifyOrderDialog: React.FC<ModifyOrderDialogProps> = ({
 };
 
 export default ModifyOrderDialog;
+

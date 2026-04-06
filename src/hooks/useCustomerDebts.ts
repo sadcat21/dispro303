@@ -88,14 +88,11 @@ export const useCreateDebt = () => {
         : debt.paid_amount > 0
           ? 'partially_paid'
           : 'active';
-      const remainingAmount = debt.remaining_amount ?? Math.max(0, debt.total_amount - debt.paid_amount);
-
       const { data, error } = await supabase
         .from('customer_debts')
         .insert({
           ...debt,
           status,
-          remaining_amount: remainingAmount,
           collection_type: debt.collection_type ?? 'none',
         })
         .select()

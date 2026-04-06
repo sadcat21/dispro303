@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { useHasPermission, useWorkerPermissions } from '@/hooks/usePermissions';
 import { MapPin, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
@@ -12,8 +13,12 @@ import { toast } from 'sonner';
 const GpsGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { role, isAuthenticated, logout } = useAuth();
   const [gpsStatus, setGpsStatus] = useState<'checking' | 'granted' | 'denied' | 'unavailable'>('checking');
+  const { isLoading: workerPermsLoading } = useWorkerPermissions();
+  const canBypassGpsGuard = useHasPermission('bypass_gps_guard');
 
   const isWorker = isAuthenticated && role !== 'admin' && role !== 'branch_admin';
+  const shouldEnforceGps = isWorker && !canBypassGpsGuard;
+  const canCheckGps = shouldEnforceGps && !workerPermsLoading;
 
   const checkGps = useCallback(() => {
     if (!navigator.geolocation) {
@@ -41,23 +46,23 @@ const GpsGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
   // Initial check + periodic monitoring
   useEffect(() => {
-    if (!isWorker) return;
+    if (!canCheckGps) return;
     checkGps();
     const interval = setInterval(checkGps, 15000);
     return () => clearInterval(interval);
-  }, [isWorker, checkGps]);
+  }, [canCheckGps, checkGps]);
 
   // Force logout when GPS denied
   useEffect(() => {
-    if (isWorker && gpsStatus === 'denied') {
+    if (canCheckGps && gpsStatus === 'denied') {
       toast.error('تم تعطيل خدمة الموقع. سيتم تسجيل الخروج.');
       const timer = setTimeout(() => logout(), 2000);
       return () => clearTimeout(timer);
     }
-  }, [isWorker, gpsStatus, logout]);
+  }, [canCheckGps, gpsStatus, logout]);
 
-  // Non-worker accounts bypass
-  if (!isWorker) return <>{children}</>;
+  // Non-worker accounts or explicit bypass
+  if (!shouldEnforceGps) return <>{children}</>;
 
   // Still checking
   if (gpsStatus === 'checking') {

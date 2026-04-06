@@ -44,6 +44,12 @@ interface ProductQuantityDialogProps {
   defaultPriceSubType?: PriceSubType;
   defaultInvoicePaymentMethod?: InvoicePaymentMethod | null;
   initialQuantity?: number;
+  initialCustomUnitPrice?: number;
+  mode?: 'add' | 'edit';
+  initialIsUnitSale?: boolean;
+  initialGiftPieces?: number;
+  initialGiftOfferId?: string;
+  initialOfferApplied?: boolean;
 }
 
 const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
@@ -58,21 +64,30 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   defaultInvoicePaymentMethod = null,
   initialQuantity = 1,
   initialCustomUnitPrice,
+  mode = 'add',
+  initialIsUnitSale = false,
+  initialGiftPieces = 0,
+  initialGiftOfferId,
+  initialOfferApplied = false,
 }) => {
   const { t, dir } = useLanguage();
   const canCustomizePrices = useHasPermission('customize_prices');
   const [quantityInput, setQuantityInput] = useState(String(initialQuantity));
   const piecesPerBox = product?.pieces_per_box || 1;
-  const [giftPieces, setGiftPieces] = useState(0);
-  const [giftOfferId, setGiftOfferId] = useState<string | undefined>(undefined);
-  const [offerApplied, setOfferApplied] = useState(false);
-  const [isUnitSale, setIsUnitSale] = useState(false);
+  const [giftPieces, setGiftPieces] = useState(initialGiftPieces || 0);
+  const [giftOfferId, setGiftOfferId] = useState<string | undefined>(initialGiftOfferId);
+  const [offerApplied, setOfferApplied] = useState(initialOfferApplied || initialGiftPieces > 0);
+  const [isUnitSale, setIsUnitSale] = useState(initialIsUnitSale);
   const [showPricingOverride, setShowPricingOverride] = useState(false);
   const [itemPaymentType, setItemPaymentType] = useState<PaymentType>(defaultPaymentType);
   const [itemPriceSubType, setItemPriceSubType] = useState<PriceSubType>(defaultPriceSubType);
   const [itemInvoicePaymentMethod, setItemInvoicePaymentMethod] = useState<InvoicePaymentMethod | null>(defaultInvoicePaymentMethod);
   const [customPriceOpen, setCustomPriceOpen] = useState(false);
   const [customUnitPriceInput, setCustomUnitPriceInput] = useState(initialCustomUnitPrice ? String(initialCustomUnitPrice) : '');
+  const safeT = useCallback((key: string, fallback: string) => {
+    const value = t(key);
+    return value && value !== key ? value : fallback;
+  }, [t]);
 
   // Derived quantity from B.P input
   const parsed = useMemo(() => parseBP(quantityInput, piecesPerBox), [quantityInput, piecesPerBox]);
@@ -80,13 +95,53 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   const quantityPieces = isUnitSale ? 0 : parsed.pieces;
   const customUnitPriceValue = Number(customUnitPriceInput || 0);
   const hasCustomUnitPrice = Number.isFinite(customUnitPriceValue) && customUnitPriceValue > 0;
+  const pricingUnit = product?.pricing_unit || 'box';
+  const safePiecesPerBox = product?.pieces_per_box || 1;
+  const safeWeightPerBox = product?.weight_per_box || 1;
+  const pricingUnitLabel = pricingUnit === 'kg'
+    ? 'kg'
+    : pricingUnit === 'unit'
+      ? t('offers.unit_piece')
+      : t('offers.unit_box');
+  const basePricingUnitPrice = pricingUnit === 'kg'
+    ? (safeWeightPerBox > 0 ? unitPrice / safeWeightPerBox : unitPrice)
+    : pricingUnit === 'unit'
+      ? (safePiecesPerBox > 0 ? unitPrice / safePiecesPerBox : unitPrice)
+      : unitPrice;
+  const resolveSaleUnitPrice = useCallback((basePrice: number, unitSale: boolean) => {
+    if (pricingUnit === 'kg') {
+      const boxPrice = basePrice * (safeWeightPerBox || 1);
+      return unitSale ? boxPrice / (safePiecesPerBox || 1) : boxPrice;
+    }
+    if (pricingUnit === 'unit') {
+      const piecePrice = basePrice;
+      return unitSale ? piecePrice : piecePrice * (safePiecesPerBox || 1);
+    }
+    const boxPrice = basePrice;
+    return unitSale ? boxPrice / (safePiecesPerBox || 1) : boxPrice;
+  }, [pricingUnit, safeWeightPerBox, safePiecesPerBox]);
 
   // Sync quantity when initialQuantity changes (edit mode vs new)
   useEffect(() => {
     if (open) {
-      setQuantityInput(isUnitSale ? String(initialQuantity) : boxesToBP(initialQuantity, piecesPerBox));
+      setIsUnitSale(initialIsUnitSale);
+      setQuantityInput(initialIsUnitSale ? String(initialQuantity) : boxesToBP(initialQuantity, piecesPerBox));
     }
-  }, [open, initialQuantity, piecesPerBox, isUnitSale]);
+  }, [open, initialQuantity, piecesPerBox, initialIsUnitSale]);
+
+  useEffect(() => {
+    if (open) {
+      setCustomUnitPriceInput(initialCustomUnitPrice ? String(initialCustomUnitPrice) : '');
+    }
+  }, [open, initialCustomUnitPrice]);
+
+  useEffect(() => {
+    if (open) {
+      setGiftPieces(initialGiftPieces || 0);
+      setGiftOfferId(initialGiftOfferId);
+      setOfferApplied((initialOfferApplied || initialGiftPieces > 0) && !initialIsUnitSale);
+    }
+  }, [open, initialGiftPieces, initialGiftOfferId, initialOfferApplied, initialIsUnitSale]);
 
   // Offer must be applied before confirming (mandatory)
   const hasUnappliedOffer = !isUnitSale && giftPieces > 0 && !offerApplied;
@@ -155,11 +210,11 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
 
   const handleOpenChange = (isOpen: boolean) => {
     if (!isOpen) {
-      setGiftPieces(0);
-      setGiftOfferId(undefined);
-      setQuantityInput(isUnitSale ? String(initialQuantity) : boxesToBP(initialQuantity, piecesPerBox));
-      setOfferApplied(false);
-      setIsUnitSale(false);
+      setGiftPieces(initialGiftPieces || 0);
+      setGiftOfferId(initialGiftOfferId);
+      setQuantityInput(initialIsUnitSale ? String(initialQuantity) : boxesToBP(initialQuantity, piecesPerBox));
+      setOfferApplied((initialOfferApplied || initialGiftPieces > 0) && !initialIsUnitSale);
+      setIsUnitSale(initialIsUnitSale);
       setShowPricingOverride(false);
       setItemPaymentType(defaultPaymentType);
       setItemPriceSubType(defaultPriceSubType);
@@ -185,7 +240,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
   const basePieces = isUnitSale ? quantity : parsed.totalPieces;
   const totalPieces = isUnitSale ? quantity : (parsed.totalPieces + appliedGiftPieces);
   const baseUnitPrice = isUnitSale ? unitPiecePrice : unitPrice;
-  const displayPrice = hasCustomUnitPrice ? customUnitPriceValue : baseUnitPrice;
+  const displayPrice = hasCustomUnitPrice ? resolveSaleUnitPrice(customUnitPriceValue, isUnitSale) : baseUnitPrice;
   const displayTotal = isUnitSale ? (displayPrice * quantity) : (displayPrice * parsed.totalBoxes);
 
   return (
@@ -195,7 +250,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
               <Package className="w-4 h-4 text-primary" />
-              {t('orders.add_product')}
+              {mode === 'edit' ? (t('orders.edit_product') || 'تعديل منتج') : t('orders.add_product')}
             </DialogTitle>
           </DialogHeader>
         </div>
@@ -252,11 +307,11 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <Button type="button" variant="outline" size="sm" className="h-8 text-[11px] gap-1" onClick={() => setCustomPriceOpen(true)}>
                   <Settings2 className="w-3.5 h-3.5" />
-                  {t('orders.custom_unit_price') || 'تخصيص سعر الوحدة'}
+                  {safeT('orders.custom_unit_price', 'تخصيص سعر الوحدة')}
                 </Button>
                 {hasCustomUnitPrice && (
                   <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                    {customUnitPriceValue.toLocaleString()} {t('common.currency')}
+                    {customUnitPriceValue.toLocaleString()} {t('common.currency')} / {pricingUnitLabel}
                   </Badge>
                 )}
               </div>
@@ -455,22 +510,22 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
         <Dialog open={customPriceOpen} onOpenChange={setCustomPriceOpen}>
           <DialogContent className="max-w-xs" dir={dir}>
             <DialogHeader>
-              <DialogTitle className="text-sm">{t('orders.custom_unit_price') || 'تخصيص سعر الوحدة'}</DialogTitle>
+              <DialogTitle className="text-sm">{safeT('orders.custom_unit_price', 'تخصيص سعر الوحدة')}</DialogTitle>
             </DialogHeader>
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <Label className="text-xs">
-                  {t('accounting.unit_price') || 'سعر الوحدة'} ({isUnitSale ? t('offers.unit_piece') : t('offers.unit_box')})
+                  {safeT('accounting.unit_price', 'سعر الوحدة')} ({pricingUnitLabel})
                 </Label>
                 <Input
                   type="number"
                   inputMode="decimal"
                   value={customUnitPriceInput}
                   onChange={(e) => setCustomUnitPriceInput(e.target.value)}
-                  placeholder={String(baseUnitPrice || 0)}
+                  placeholder={String(basePricingUnitPrice || 0)}
                 />
                 <div className="text-[10px] text-muted-foreground">
-                  {t('orders.default_price') || 'السعر الافتراضي'}: {baseUnitPrice.toLocaleString()} {t('common.currency')}
+                  {safeT('orders.default_price', 'السعر الافتراضي')}: {basePricingUnitPrice.toLocaleString()} {t('common.currency')} / {pricingUnitLabel}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -486,7 +541,7 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
                     setCustomPriceOpen(false);
                   }}
                 >
-                  {t('orders.use_default_price') || 'استخدام السعر الافتراضي'}
+                  {safeT('orders.use_default_price', 'استخدام السعر الافتراضي')}
                 </Button>
               </div>
             </div>
@@ -496,7 +551,9 @@ const ProductQuantityDialog: React.FC<ProductQuantityDialogProps> = ({
         <div className="sticky bottom-0 border-t border-border bg-background px-6 py-3 flex flex-row gap-2">
           <Button className="flex-1" onClick={handleConfirm} disabled={hasUnappliedOffer}>
             <Plus className="w-4 h-4 ms-2" />
-            {hasUnappliedOffer ? (t('offers.must_apply_offer') || 'يجب تفعيل العرض أولاً') : t('orders.add_to_order')}
+            {hasUnappliedOffer
+              ? (t('offers.must_apply_offer') || 'يجب تفعيل العرض أولاً')
+              : (mode === 'edit' ? (t('orders.update_item') || 'تحديث المنتج') : t('orders.add_to_order'))}
           </Button>
           <Button variant="outline" className="flex-1" onClick={() => handleOpenChange(false)}>
             {t('common.cancel')}

@@ -13,7 +13,7 @@ import { useWarehouseStock } from '@/hooks/useWarehouseStock';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
-import DirectSaleDialog from '@/components/warehouse/DirectSaleDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
 import QuickReceiptDialog from '@/components/warehouse/QuickReceiptDialog';
 import QuickLoadWorkerDialog from '@/components/warehouse/QuickLoadWorkerDialog';
 import BranchPalletCard from '@/components/stock/BranchPalletCard';
@@ -41,7 +41,7 @@ const WarehouseStock: React.FC = () => {
   const navigate = useNavigate();
   const { activeBranch } = useAuth();
   const { warehouseStock, workerStocksByWorker, isLoading, products, workers, createReceipt, loadToWorker } = useWarehouseStock();
-  const [showSaleDialog, setShowSaleDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
   const [showLoadWorkerDialog, setShowLoadWorkerDialog] = useState(false);
   const [showReviewDialog, setShowReviewDialog] = useState(false);
@@ -287,7 +287,7 @@ const WarehouseStock: React.FC = () => {
             </Button>
           )}
           {hasStock && !isDirectSaleHidden && (
-            <Button size="sm" onClick={() => setShowSaleDialog(true)}>
+            <Button size="sm" onClick={() => setShowSalesHubDialog(true)}>
               <ShoppingBag className="w-4 h-4 ml-1" />
               {t('stock.direct_sale')}
             </Button>
@@ -468,11 +468,12 @@ const WarehouseStock: React.FC = () => {
         </TabsContent>
       </Tabs>
 
-      <DirectSaleDialog
-        open={showSaleDialog}
-        onOpenChange={setShowSaleDialog}
-        stockItems={stockItemsForSale}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={setShowSalesHubDialog}
+        initialTab="direct"
         stockSource="warehouse"
+        stockItems={stockItemsForSale}
       />
 
       <QuickReceiptDialog

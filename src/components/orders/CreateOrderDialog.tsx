@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { addDays, format } from 'date-fns';
 import { Button } from '@/components/ui/button';
@@ -44,6 +44,8 @@ interface CreateOrderDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initialCustomerId?: string;
+  embedded?: boolean;
+  hideHeader?: boolean;
 }
 
 interface OrderItemWithPrice {
@@ -64,7 +66,13 @@ interface OrderItemWithPrice {
   piecesPerBox?: number;
 }
 
-const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChange, initialCustomerId }) => {
+const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({
+  open,
+  onOpenChange,
+  initialCustomerId,
+  embedded = false,
+  hideHeader = false,
+}) => {
   const { workerId, activeBranch } = useAuth();
   const { t, dir, language } = useLanguage();
   const { companyInfo } = useCompanyInfo();
@@ -289,6 +297,22 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
     return basePrice;
   };
 
+  const resolveCustomSalePrice = (product: Product, baseUnitPrice: number, unitSale: boolean): number => {
+    const piecesPerBox = product.pieces_per_box || 1;
+    const weightPerBox = product.weight_per_box || 1;
+    const pricingUnit = product.pricing_unit || 'box';
+    if (pricingUnit === 'kg') {
+      const boxPrice = baseUnitPrice * weightPerBox;
+      return unitSale ? boxPrice / piecesPerBox : boxPrice;
+    }
+    if (pricingUnit === 'unit') {
+      const piecePrice = baseUnitPrice;
+      return unitSale ? piecePrice : piecePrice * piecesPerBox;
+    }
+    const boxPrice = baseUnitPrice;
+    return unitSale ? boxPrice / piecesPerBox : boxPrice;
+  };
+
   const handleAddProductWithQuantity = (productId: string, quantity: number, giftInfo?: { giftQuantity: number; giftPieces: number; offerId?: string }, isUnitSale?: boolean, perItemPricing?: PerItemPricing) => {
     const product = products.find(p => p.id === productId);
     if (!product) return;
@@ -296,10 +320,13 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
     // Use per-item pricing if provided, otherwise use order-level defaults
     const effectivePaymentType = perItemPricing?.paymentType || paymentType;
     const effectivePriceSubType = perItemPricing?.priceSubType || priceSubType;
+    const customUnitPrice = perItemPricing?.customUnitPrice;
+    const customSalePrice = customUnitPrice !== undefined ? resolveCustomSalePrice(product, customUnitPrice, !!isUnitSale) : undefined;
 
     if (isUnitSale) {
       const boxPrice = getProductPrice(product, effectivePaymentType, effectivePriceSubType);
-      const piecePrice = product.pieces_per_box > 0 ? boxPrice / product.pieces_per_box : boxPrice;
+      const basePiecePrice = product.pieces_per_box > 0 ? boxPrice / product.pieces_per_box : boxPrice;
+      const piecePrice = customSalePrice ?? basePiecePrice;
       const totalPrice = piecePrice * quantity;
 
       setOrderItems(prev => {
@@ -308,6 +335,7 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
           quantity,
           unitPrice: piecePrice,
           totalPrice,
+          customUnitPrice: customUnitPrice,
           isUnitSale: true,
           itemPaymentType: perItemPricing?.paymentType || paymentType,
           itemInvoicePaymentMethod: perItemPricing?.invoicePaymentMethod,
@@ -321,7 +349,7 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
       return;
     }
 
-    const unitPrice = getProductPrice(product, effectivePaymentType, effectivePriceSubType);
+    const unitPrice = customSalePrice ?? getProductPrice(product, effectivePaymentType, effectivePriceSubType);
     const giftQuantity = giftInfo?.giftQuantity || 0;
     const paidQuantity = quantity - giftQuantity;
 
@@ -330,6 +358,7 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
       quantity,
       unitPrice,
       totalPrice: paidQuantity * unitPrice,
+      customUnitPrice: customUnitPrice,
       giftQuantity: giftQuantity || undefined,
       giftPieces: giftInfo?.giftPieces || undefined,
       giftOfferId: giftInfo?.offerId,
@@ -354,7 +383,7 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
       });
     } else {
       setOrderItems(prev => {
-        const existing = prev.find(item => item.productId === productId && !item.isUnitSale && !item.itemPaymentType && !perItemPricing);
+        const existing = prev.find(item => item.productId === productId && !item.isUnitSale && !item.itemPaymentType && !item.customUnitPrice && !perItemPricing);
         if (existing && !perItemPricing) {
           const newQuantity = existing.quantity + quantity;
           const newGiftBoxes = (existing.giftQuantity || 0) + giftQuantity;
@@ -435,9 +464,17 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
       setOrderItems(prev => prev.map(item => {
         const product = products.find(p => p.id === item.productId);
         if (product) {
-          const unitPrice = getProductPrice(product);
+          const effectivePaymentType = (item.itemPaymentType as PaymentType | undefined) || paymentType;
+          const effectivePriceSubType = (item.itemPriceSubType as PriceSubType | undefined) || priceSubType;
+          const baseBoxPrice = getProductPrice(product, effectivePaymentType, effectivePriceSubType);
+          const basePiecePrice = product.pieces_per_box > 0 ? baseBoxPrice / product.pieces_per_box : baseBoxPrice;
+          const fallbackUnitPrice = item.isUnitSale ? basePiecePrice : baseBoxPrice;
+          const unitPrice = item.customUnitPrice !== undefined
+            ? resolveCustomSalePrice(product, item.customUnitPrice, !!item.isUnitSale)
+            : fallbackUnitPrice;
           const paidQty = item.quantity - (item.giftQuantity || 0);
-          return { ...item, unitPrice, totalPrice: paidQty * unitPrice };
+          const totalPrice = item.isUnitSale ? unitPrice * item.quantity : paidQty * unitPrice;
+          return { ...item, unitPrice, totalPrice };
         }
         return item;
       }));
@@ -588,24 +625,18 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
                       {t('common.loading')}
                     </span>
                   ) : selectedCustomer ? (
-                    <span className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
-                        {(selectedCustomer.store_name || selectedCustomer.name)?.charAt(0) || '?'}
-                      </div>
-                      <CustomerLabel
-                        customer={{
-                          name: selectedCustomer.name,
-                          store_name: selectedCustomer.store_name,
-                          customer_type: selectedCustomer.customer_type,
-                          sector_name: selectedCustomer.sector_id ? sectors.find(s => s.id === selectedCustomer.sector_id)?.name : undefined,
-                        }}
-                        compact
-                        hideBadges
-                      />
-                      {selectedCustomer.wilaya && (
-                        <span className="text-xs text-muted-foreground">({selectedCustomer.wilaya})</span>
-                      )}
-                    </span>
+                    <CustomerSummary
+                      customer={{
+                        name: selectedCustomer.name,
+                        store_name: selectedCustomer.store_name,
+                        customer_type: selectedCustomer.customer_type,
+                        sector_name: selectedCustomer.sector_id ? sectors.find(s => s.id === selectedCustomer.sector_id)?.name : undefined,
+                      }}
+                      compact
+                      hideBadges
+                      avatarSize="sm"
+                      showMeta={false}
+                    />
                   ) : (
                     <span className="text-muted-foreground">{t('orders.select_customer')}</span>
                   )}
@@ -636,44 +667,38 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
                 {/* Selected Customer Info */}
                 {selectedCustomer && (
                   <div className="p-3 bg-muted/50 rounded-lg space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-bold">
-                          {(selectedCustomer.store_name || selectedCustomer.name)?.charAt(0) || '?'}
+                    <CustomerSummary
+                      customer={{
+                        name: selectedCustomer.name,
+                        store_name: selectedCustomer.store_name,
+                        customer_type: selectedCustomer.customer_type,
+                        sector_name: selectedCustomer.sector_id ? sectors.find(s => s.id === selectedCustomer.sector_id)?.name : undefined,
+                        phone: selectedCustomer.phone,
+                        wilaya: selectedCustomer.wilaya,
+                      }}
+                      avatarSize="md"
+                      footer={(
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                            {selectedCustomer.default_payment_type === 'with_invoice' ? t('orders.with_invoice') :
+                              selectedCustomer.default_price_subtype === 'super_gros' ? t('products.price_super_gros') :
+                                selectedCustomer.default_price_subtype === 'retail' ? t('products.price_retail') : t('products.price_gros')
+                            }
+                          </Badge>
                         </div>
-                        <div>
-                          <CustomerLabel
-                            customer={{
-                              name: selectedCustomer.name,
-                              store_name: selectedCustomer.store_name,
-                              customer_type: selectedCustomer.customer_type,
-                              sector_name: selectedCustomer.sector_id ? sectors.find(s => s.id === selectedCustomer.sector_id)?.name : undefined,
-                            }}
-                          />
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <p className="text-xs text-muted-foreground">
-                              {selectedCustomer.wilaya}
-                              {selectedCustomer.phone && ` • ${selectedCustomer.phone}`}
-                            </p>
-                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                              {selectedCustomer.default_payment_type === 'with_invoice' ? t('orders.with_invoice') :
-                                selectedCustomer.default_price_subtype === 'super_gros' ? t('products.price_super_gros') :
-                                  selectedCustomer.default_price_subtype === 'retail' ? t('products.price_retail') : t('products.price_gros')
-                              }
-                            </Badge>
-                          </div>
-                        </div>
-                      </div>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => setShowEditCustomerDialog(true)}
-                      >
-                        <Edit2 className="w-4 h-4" />
-                      </Button>
-                    </div>
+                      )}
+                      rightSlot={(
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => setShowEditCustomerDialog(true)}
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </Button>
+                      )}
+                    />
 
                     <CustomerDistanceIndicator
                       customerLatitude={selectedCustomer.latitude}
@@ -1157,6 +1182,7 @@ const CreateOrderDialog: React.FC<CreateOrderDialogProps> = ({ open, onOpenChang
         defaultPriceSubType={priceSubType}
         defaultInvoicePaymentMethod={invoicePaymentMethod}
         initialQuantity={editingInitialQuantity}
+        initialCustomUnitPrice={editingCustomUnitPrice}
       />
 
       <AddCustomerDialog

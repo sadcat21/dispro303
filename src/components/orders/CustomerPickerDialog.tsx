@@ -10,7 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { Customer, Sector } from '@/types/database';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { getLocalizedName } from '@/utils/sectorName';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -279,13 +279,18 @@ const CustomerPickerDialog: React.FC<CustomerPickerDialogProps> = ({
                             >
                               <ChevronLeft className="w-4 h-4 text-muted-foreground shrink-0" />
                               <div className="flex-1 min-w-0 text-right">
-                                <CustomerLabel
+                                <CustomerSummary
                                   customer={{
                                     name: customer.name,
                                     store_name: customer.store_name,
                                     customer_type: customer.customer_type,
                                     sector_name: getSectorName(customer.sector_id),
+                                    phone: customer.phone,
+                                    wilaya: customer.wilaya,
                                   }}
+                                  compact
+                                  showAvatar={false}
+                                  showMeta={false}
                                 />
                                 {debtInfo && debtInfo.total > 0 && (
                                   <div className="flex items-center gap-1 mt-0.5">

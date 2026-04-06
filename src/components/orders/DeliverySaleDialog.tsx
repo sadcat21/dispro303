@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import ReceiptDialog from '@/components/printing/ReceiptDialog';
 import { ReceiptItem, ReceiptType } from '@/types/receipt';
@@ -10,7 +10,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
-  Truck, Plus, Minus, Loader2,
+  Truck, Loader2,
   XCircle, Package, PlusCircle, Stamp, CheckCircle, PackageX, Gift, AlertTriangle, Copy, DollarSign, Banknote, Clock, Pencil
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -43,6 +43,8 @@ interface DeliverySaleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   order: OrderWithDetails;
+  embedded?: boolean;
+  hideHeader?: boolean;
 }
 
 interface SaleItem {
@@ -61,7 +63,13 @@ interface SaleItem {
   weightPerBox?: number | null;
 }
 
-const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenChange, order }) => {
+const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({
+  open,
+  onOpenChange,
+  order,
+  embedded = false,
+  hideHeader = false,
+}) => {
   const { workerId, activeBranch, activeRole } = useAuth();
   const { t, dir } = useLanguage();
   const queryClient = useQueryClient();
@@ -144,6 +152,14 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
   const [receiptDataState, setReceiptDataState] = useState<any>(null);
   const [showQuantityDialog, setShowQuantityDialog] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [editingProductMode, setEditingProductMode] = useState(false);
+  const [editingTargetProductId, setEditingTargetProductId] = useState<string | null>(null);
+  const [editingInitialQuantity, setEditingInitialQuantity] = useState(1);
+  const [editingInitialGiftPieces, setEditingInitialGiftPieces] = useState(0);
+  const [editingInitialOfferApplied, setEditingInitialOfferApplied] = useState(false);
+  const [editingInitialIsUnitSale, setEditingInitialIsUnitSale] = useState(false);
+  const [editingInitialCustomUnitPrice, setEditingInitialCustomUnitPrice] = useState<number | undefined>(undefined);
+  const [editingInitialGiftOfferId, setEditingInitialGiftOfferId] = useState<string | undefined>(undefined);
   const [newProductId, setNewProductId] = useState('');
   const [initialized, setInitialized] = useState(false);
   const [partialDeliveryAction, setPartialDeliveryAction] = useState<'none' | 'create_order' | 'deliver_only'>('none');
@@ -265,71 +281,21 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
     stockItems?.find(s => s.product_id === productId)?.quantity || 0,
   [stockItems]);
 
-  // Quantity handlers
-  // Delta applies to PAID quantity, gift is recalculated on top (same logic as ModifyOrderDialog)
-  const handleUpdateQuantity = (productId: string, delta: number) => {
-    const available = getAvailable(productId);
-    setSaleItems(prev =>
-      prev.map(item => {
-        if (item.productId !== productId) return item;
-        // Current paid quantity
-        const currentPaidQty = Math.max(0, item.quantity - item.giftQuantity);
-        let newPaidQty = currentPaidQty + delta;
-        if (newPaidQty <= 0) return { ...item, quantity: 0, totalPrice: 0, giftQuantity: 0, giftPieces: 0 };
-        
-        // Anti-manipulation skip logic: when decreasing, if the new total (paid+gift)
-        // doesn't actually decrease, keep reducing paid qty until it does.
-        // Example: offer "buy 50 get 1" → at 51 total (50+1), pressing - should skip 50→49
-        if (delta < 0) {
-          let giftResult = recalcGift(item.productId, newPaidQty, item.piecesPerBox);
-          let newGiftQty = giftResult.giftBoxes;
-          let newGiftPcs = giftResult.giftPieces;
-          let newTotal = newPaidQty + newGiftQty;
-          while (newTotal >= item.quantity && newPaidQty > 0) {
-            newPaidQty -= 1;
-            giftResult = recalcGift(item.productId, newPaidQty, item.piecesPerBox);
-            newGiftQty = giftResult.giftBoxes;
-            newGiftPcs = giftResult.giftPieces;
-            newTotal = newPaidQty + newGiftQty;
-          }
-          if (newPaidQty <= 0) return { ...item, quantity: 0, totalPrice: 0, giftQuantity: 0, giftPieces: 0 };
-          const oldGift = item.giftQuantity;
-          if (oldGift > 0 && newGiftQty === 0 && newGiftPcs === 0) {
-            toast.warning(`⚠️ ${item.productName}: تم فقدان العرض لأن الكمية أقل من شرط العرض`, { duration: 5000 });
-          } else if (oldGift > 0 && newGiftQty < oldGift) {
-            toast.warning(`⚠️ ${item.productName}: تغير العرض من ${oldGift} إلى ${newGiftQty} صندوق`, { duration: 4000 });
-          }
-          return { ...item, quantity: newTotal, giftQuantity: newGiftQty, giftPieces: newGiftPcs, totalPrice: newPaidQty * item.unitPrice };
-        }
-
-        // Increasing
-        const giftResult = recalcGift(item.productId, newPaidQty, item.piecesPerBox);
-        const newGiftQty = giftResult.giftBoxes;
-        const newGiftPcs = giftResult.giftPieces;
-        const newTotal = newPaidQty + newGiftQty;
-        // Check stock availability for the full total (paid + gift)
-        if (newTotal > available) {
-          if (newPaidQty > available) return item;
-        }
-        // Warn if gift changed
-        const oldGift = item.giftQuantity;
-        const oldGiftPcs = item.giftPieces;
-        if (oldGift === 0 && oldGiftPcs === 0 && (newGiftQty > 0 || newGiftPcs > 0)) {
-          const giftLabel = newGiftQty > 0 ? `${newGiftQty} صندوق` : `${newGiftPcs} قطعة`;
-          toast.success(`🎁 ${item.productName}: تم تفعيل هدية ${giftLabel}`, { duration: 3000 });
-        } else if (oldGift > 0 && newGiftQty > oldGift) {
-          toast.success(`🎁 ${item.productName}: زادت الهدية إلى ${newGiftQty} صندوق`, { duration: 3000 });
-        }
-        return { 
-          ...item, 
-          quantity: newTotal, 
-          giftQuantity: newGiftQty,
-          giftPieces: newGiftPcs,
-          totalPrice: newPaidQty * item.unitPrice 
-        };
-      }).filter(item => item.quantity > 0 || item.originalItemId)
-    );
-  };
+  const resolveCustomSalePrice = useCallback((product: Product, baseUnitPrice: number, unitSale: boolean): number => {
+    const piecesPerBox = product.pieces_per_box || 1;
+    const weightPerBox = product.weight_per_box || 1;
+    const pricingUnit = product.pricing_unit || 'box';
+    if (pricingUnit === 'kg') {
+      const boxPrice = baseUnitPrice * weightPerBox;
+      return unitSale ? boxPrice / piecesPerBox : boxPrice;
+    }
+    if (pricingUnit === 'unit') {
+      const piecePrice = baseUnitPrice;
+      return unitSale ? piecePrice : piecePrice * piecesPerBox;
+    }
+    const boxPrice = baseUnitPrice;
+    return unitSale ? boxPrice / piecesPerBox : boxPrice;
+  }, []);
 
   const handleRemoveItem = (productId: string) => {
     setSaleItems(prev => {
@@ -340,6 +306,64 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
       }
       return prev.filter(i => i.productId !== productId);
     });
+  };
+
+  const handleEditItem = (item: SaleItem) => {
+    const product =
+      allProducts.find(p => p.id === item.productId) ||
+      orderItems?.find(oi => oi.product_id === item.productId)?.product ||
+      null;
+    if (!product) return;
+
+    const paidQty = Math.max(1, item.quantity - item.giftQuantity);
+    const piecesPerBox = item.piecesPerBox || product.pieces_per_box || 1;
+    const totalGiftPieces = (item.giftQuantity || 0) * piecesPerBox + (item.giftPieces || 0);
+
+    setEditingProductMode(true);
+    setEditingTargetProductId(item.productId);
+    setEditingInitialQuantity(paidQty);
+    setEditingInitialGiftPieces(totalGiftPieces);
+    setEditingInitialOfferApplied((item.giftQuantity || 0) > 0 || (item.giftPieces || 0) > 0);
+    setEditingInitialIsUnitSale(false);
+    setEditingInitialCustomUnitPrice(undefined);
+    setEditingInitialGiftOfferId(item.giftOfferId || undefined);
+    setSelectedProduct(product);
+    setShowQuantityDialog(true);
+  };
+
+  const handleEditProductWithQuantity = (
+    productId: string,
+    quantity: number,
+    giftInfo?: any,
+    isUnitSale?: boolean,
+    perItemPricing?: any
+  ) => {
+    const product = allProducts.find(p => p.id === productId) || orderItems?.find(oi => oi.product_id === productId)?.product;
+    if (!product) return;
+
+    const giftQuantity = giftInfo?.giftQuantity || 0;
+    const giftPieces = giftInfo?.giftPieces || 0;
+    const paidQuantity = Math.max(0, quantity - giftQuantity);
+    const baseUnitPrice = saleItems.find(i => i.productId === productId)?.unitPrice || 0;
+    const unitPrice = perItemPricing?.customUnitPrice !== undefined
+      ? resolveCustomSalePrice(product, perItemPricing.customUnitPrice, !!isUnitSale)
+      : baseUnitPrice;
+    const totalPrice = paidQuantity * unitPrice;
+
+    setSaleItems(prev => prev.map(item => {
+      if (item.productId !== productId) return item;
+      return {
+        ...item,
+        quantity,
+        unitPrice,
+        totalPrice,
+        giftQuantity,
+        giftPieces,
+        giftOfferId: giftInfo?.offerId || item.giftOfferId,
+      };
+    }));
+    setEditingProductMode(false);
+    setEditingTargetProductId(null);
   };
 
   // Add new product from worker stock
@@ -397,6 +421,11 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
     const amountAfterPrepaid = Math.max(0, totalAmount - prepaidAmount - creditDeduction);
     return { totalItems, totalGiftBoxes, subtotal, stampAmount, stampPercentage, totalAmount, amountAfterPrepaid, creditDeduction };
   }, [saleItems, order.payment_type, order, stampTiers, shortageProductIds, prepaidAmount, useCreditBalance, creditSummary.financialTotal]);
+
+  const editingItem = useMemo(() => {
+    if (!editingTargetProductId) return null;
+    return saleItems.find(item => item.productId === editingTargetProductId) || null;
+  }, [editingTargetProductId, saleItems]);
 
   // Detect partial delivery (items reduced or removed)
   const partialDeliveryDiff = useMemo(() => {
@@ -951,6 +980,13 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
   const getProductImage = useCallback((productId: string) => productImageMap.get(productId) || null, [productImageMap]);
 
   if (isLoadingItems) {
+    if (embedded) {
+      return (
+        <div className="flex items-center justify-center py-12" dir={dir}>
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      );
+    }
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-lg" dir={dir}>
@@ -962,45 +998,34 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
     );
   }
 
-  return (
+  const content = (
     <>
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-lg max-h-[90vh] p-0 gap-0 overflow-hidden" dir={dir}>
-          <DialogHeader className="p-4 pb-2 border-b">
+      {!hideHeader && (
+        <DialogHeader className="p-4 pb-2 border-b">
             <DialogTitle className="flex items-center gap-2">
               <Truck className="w-5 h-5" />
               {t('orders.delivery_sale') || 'بيع بالتوصيل'}
             </DialogTitle>
-          </DialogHeader>
+        </DialogHeader>
+      )}
 
-          <ScrollArea className="max-h-[calc(90vh-8rem)]">
-            <div className="px-4">
-            <div className="py-4 space-y-5">
+      <ScrollArea className={embedded ? "flex-1 min-h-0" : "max-h-[calc(90vh-8rem)]"}>
+        <div className="px-4">
+        <div className="py-4 space-y-5">
               {/* Customer Info */}
               <div className="p-3 bg-muted/50 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-bold">
-                    {(order.customer?.store_name || order.customer?.name)?.charAt(0) || '?'}
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <CustomerLabel
-                        customer={{
-                          name: order.customer?.name,
-                          store_name: order.customer?.store_name,
-                          customer_type: order.customer?.customer_type,
-                          sector_name: (order.customer as any)?.sector?.name,
-                        }}
-                        compact
-                      />
-                      <CustomerCreditBadges customerId={order.customer_id} />
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {order.customer?.store_name ? order.customer?.name : ''}
-                      {order.customer?.phone && `${order.customer?.store_name ? ' • ' : ''}${order.customer.phone}`}
-                      {order.customer?.wilaya && ` • ${order.customer.wilaya}`}
-                    </p>
-                    {/* Payment info badges */}
+                <CustomerSummary
+                  customer={{
+                    name: order.customer?.name,
+                    store_name: order.customer?.store_name,
+                    customer_type: order.customer?.customer_type,
+                    sector_name: (order.customer as any)?.sector?.name,
+                    phone: order.customer?.phone,
+                    wilaya: order.customer?.wilaya,
+                  }}
+                  avatarSize="md"
+                  badges={<CustomerCreditBadges customerId={order.customer_id} />}
+                  footer={(
                     <div className="flex items-center gap-1.5 flex-wrap mt-1">
                       <Badge variant="outline" className="text-[10px] px-1.5 h-4">
                         {order.payment_type === 'with_invoice' ? 'فاتورة' : 'بدون فاتورة'}
@@ -1016,8 +1041,8 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
                         </Badge>
                       )}
                     </div>
-                  </div>
-                </div>
+                  )}
+                />
                 <CustomerDistanceIndicator
                   customerLatitude={order.customer?.latitude}
                   customerLongitude={order.customer?.longitude}
@@ -1081,11 +1106,20 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
                     return (
                       <div
                         key={item.productId}
+                        role={!isShortage ? 'button' : undefined}
+                        tabIndex={!isShortage ? 0 : undefined}
+                        onClick={!isShortage ? () => handleEditItem(item) : undefined}
+                        onKeyDown={!isShortage ? (event) => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            handleEditItem(item);
+                          }
+                        } : undefined}
                         className={`rounded-xl border p-2.5 transition-colors ${
                           isShortage ? 'opacity-60 bg-orange-50 dark:bg-orange-900/10 border-orange-200 dark:border-orange-800' :
                           item.quantity === 0 ? 'opacity-50 bg-destructive/5 border-destructive/20' :
                           changed ? 'bg-primary/5 border-primary/25 shadow-sm' : 'bg-background/90 border-border/70'
-                        }`}
+                        } ${!isShortage ? 'cursor-pointer hover:border-primary/35 hover:bg-primary/5 focus:outline-none focus:ring-2 focus:ring-primary/25' : ''}`}
                       >
                         <div className="flex items-start gap-3">
                           <div className="h-16 w-16 shrink-0 overflow-hidden rounded-xl border bg-muted/30">
@@ -1176,20 +1210,14 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
                             {!isShortage && (
                               <div className="flex items-center justify-between gap-3 pt-1">
                                 <div className="flex flex-col items-start min-w-10">
-                                  <span className="text-[11px] text-muted-foreground">الكمية الحالية</span>
+                                  <span className="text-[11px] text-muted-foreground">{t('common.quantity')}</span>
                                   <span className="font-bold text-sm">{Math.max(0, item.quantity - item.giftQuantity)}</span>
                                 </div>
                                 <div className="flex items-center gap-1.5">
-                                  <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={() => handleUpdateQuantity(item.productId, -1)}>
-                                    <Minus className="w-3.5 h-3.5" />
-                                  </Button>
-                                  <div className="min-w-[42px] rounded-full bg-primary/8 px-2.5 py-1 text-center text-sm font-bold text-primary">
-                                    {Math.max(0, item.quantity - item.giftQuantity)}
-                                  </div>
-                                  <Button type="button" variant="outline" size="icon" className="h-8 w-8 rounded-full" onClick={() => handleUpdateQuantity(item.productId, 1)}>
-                                    <Plus className="w-3.5 h-3.5" />
-                                  </Button>
-                                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full text-destructive hover:text-destructive" onClick={() => handleRemoveItem(item.productId)}>
+                                  <span className="text-[11px] text-muted-foreground px-2">
+                                    {t('orders.tap_product_to_edit') || 'انقر على المنتج للتعديل'}
+                                  </span>
+                                  <Button type="button" variant="ghost" size="icon" className="h-8 w-8 rounded-full text-destructive hover:text-destructive" onClick={(event) => { event.stopPropagation(); handleRemoveItem(item.productId); }}>
                                     <XCircle className="w-4 h-4" />
                                   </Button>
                                 </div>
@@ -1371,8 +1399,45 @@ const DeliverySaleDialog: React.FC<DeliverySaleDialogProps> = ({ open, onOpenCha
               )}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+    </>
+  );
+
+  return (
+    <>
+      {embedded ? (
+        <div className="flex flex-col flex-1 min-h-0" dir={dir}>
+          {content}
+        </div>
+      ) : (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+          <DialogContent className="max-w-lg max-h-[90vh] p-0 gap-0 overflow-hidden" dir={dir}>
+            {content}
+          </DialogContent>
+        </Dialog>
+      )}
+
+      <ProductQuantityDialog
+        open={showQuantityDialog}
+        onOpenChange={(openState) => {
+          setShowQuantityDialog(openState);
+          if (!openState) {
+            setEditingProductMode(false);
+            setEditingTargetProductId(null);
+            setEditingInitialGiftOfferId(undefined);
+          }
+        }}
+        product={selectedProduct}
+        onConfirm={handleEditProductWithQuantity}
+        unitPrice={editingItem?.unitPrice || 0}
+        unitPiecePrice={editingItem ? (editingItem.unitPrice / (editingItem.piecesPerBox || 1)) : 0}
+        mode="edit"
+        initialQuantity={editingInitialQuantity}
+        initialGiftPieces={editingInitialGiftPieces}
+        initialGiftOfferId={editingInitialGiftOfferId}
+        initialOfferApplied={editingInitialOfferApplied}
+        initialIsUnitSale={editingInitialIsUnitSale}
+        initialCustomUnitPrice={editingInitialCustomUnitPrice}
+      />
 
       {/* Payment Dialog - Cash/Without Invoice */}
       <DeliveryPaymentDialog

@@ -1,5 +1,5 @@
 ﻿import React, { useMemo, useState, useEffect } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { getLocalizedName } from '@/utils/sectorName';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -29,12 +29,10 @@ import { OrderWithDetails } from '@/types/database';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { format, addDays, isFriday } from 'date-fns';
-import DeliverySaleDialog from '@/components/orders/DeliverySaleDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
 import CreateOrderDialog from '@/components/orders/CreateOrderDialog';
-import VisitNoPaymentDialog from '@/components/debts/VisitNoPaymentDialog';
-import CollectDebtDialog from '@/components/debts/CollectDebtDialog';
-import CollectedDebtOperationDialog, { TodayDebtCollectionOperation } from '@/components/debts/CollectedDebtOperationDialog';
-import DirectSaleDialog from '@/components/warehouse/DirectSaleDialog';
+import DebtFlowDialog from '@/components/debts/DebtFlowDialog';
+import { TodayDebtCollectionOperation } from '@/components/debts/CollectedDebtOperationDialog';
 import ReceiptDialog from '@/components/printing/ReceiptDialog';
 import ModifyOrderDialog from '@/components/orders/ModifyOrderDialog';
 import { useOrderItems } from '@/hooks/useOrders';
@@ -267,7 +265,8 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
   const todayDateStr = selectedDayBounds.dateKey;
 
   // Sub-dialog states
-  const [showDeliveryDialog, setShowDeliveryDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
+  const [salesHubTab, setSalesHubTab] = useState<'direct' | 'delivery'>('direct');
   const [pendingDeliveryOrder, setPendingDeliveryOrder] = useState<OrderWithDetails | null>(null);
   const [showCreateOrder, setShowCreateOrder] = useState(false);
   const [selectedCustomerForOrder, setSelectedCustomerForOrder] = useState<string | null>(null);
@@ -279,7 +278,6 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
   const [checkingLocationFor, setCheckingLocationFor] = useState<string | null>(null);
   const [loadingDeliveryFor, setLoadingDeliveryFor] = useState<string | null>(null);
   const [orderDetailsDialog, setOrderDetailsDialog] = useState<any>(null);
-  const [showDirectSale, setShowDirectSale] = useState(false);
   const [directSaleCustomerId, setDirectSaleCustomerId] = useState<string | null>(null);
   const [printReceiptData, setPrintReceiptData] = useState<any>(null);
   const [showPrintReceipt, setShowPrintReceipt] = useState(false);
@@ -567,7 +565,7 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
   });
 
   // Today's direct sales — detect via visit_tracking (operation_type='direct_sale') since
-  // the DirectSaleDialog tracks each sale as a 'direct_sale' visit, which is the most reliable marker.
+  // the sales flow (via SalesHub/DirectSaleDialog) tracks each sale as a 'direct_sale' visit.
   // Also fetch from receipts as a secondary source.
   const { data: todayDirectSales = [] } = useQuery({
     queryKey: ['today-direct-sales-dialog', effectiveWorkerId, todayStart, selectedDayBounds.end],
@@ -1379,7 +1377,8 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
       if (error) throw error;
       if (data && data.length > 0) {
         setPendingDeliveryOrder(data[0] as OrderWithDetails);
-        setShowDeliveryDialog(true);
+        setSalesHubTab('delivery');
+        setShowSalesHubDialog(true);
       } else {
         toast.error('لا توجد طلبية معينة لهذا العميل');
       }
@@ -1851,7 +1850,8 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
 
   const handleDirectSaleClick = (customer: any) => {
     setDirectSaleCustomerId(customer.id);
-    setShowDirectSale(true);
+    setSalesHubTab('direct');
+    setShowSalesHubDialog(true);
   };
 
   const handleDebtCustomerClosed = async (debt: any) => {
@@ -2422,25 +2422,26 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
       )}
 
       {/* Sub-dialogs */}
-      {pendingDeliveryOrder && (
-        <DeliverySaleDialog
-          open={showDeliveryDialog}
-          onOpenChange={(o) => { setShowDeliveryDialog(o); if (!o) setTimeout(() => setPendingDeliveryOrder(null), 2000); }}
-          order={pendingDeliveryOrder}
-        />
-      )}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={(open) => {
+          setShowSalesHubDialog(open);
+          if (!open) {
+            setPendingDeliveryOrder(null);
+            setDirectSaleCustomerId(null);
+          }
+        }}
+        initialTab={salesHubTab}
+        initialDeliveryOrder={pendingDeliveryOrder}
+        initialCustomerId={directSaleCustomerId || undefined}
+        stockSource="worker"
+        stockItems={workerStock}
+      />
 
       <CreateOrderDialog
         open={showCreateOrder}
         onOpenChange={setShowCreateOrder}
         initialCustomerId={selectedCustomerForOrder || undefined}
-      />
-
-      <DirectSaleDialog
-        open={showDirectSale}
-        onOpenChange={(o) => { setShowDirectSale(o); if (!o) setDirectSaleCustomerId(null); }}
-        stockItems={workerStock}
-        initialCustomerId={directSaleCustomerId || undefined}
       />
 
       <Dialog open={calendarOpen} onOpenChange={setCalendarOpen}>
@@ -2468,42 +2469,31 @@ const TodayCustomersDialog: React.FC<TodayCustomersDialogProps> = ({
       </Dialog>
 
       {selectedDebt && (
-        <VisitNoPaymentDialog
+        <DebtFlowDialog
           open={showVisitNoPayment}
           onOpenChange={(o) => { setShowVisitNoPayment(o); if (!o) setSelectedDebt(null); }}
-          debtId={selectedDebt.id}
-          customerName={(selectedDebt.customer as any)?.store_name || (selectedDebt.customer as any)?.name || ''}
-          collectionType={selectedDebt.collection_type}
-          collectionDays={selectedDebt.collection_days}
-          customerLatitude={(selectedDebt.customer as any)?.latitude}
-          customerLongitude={(selectedDebt.customer as any)?.longitude}
+          mode="visit"
+          debt={selectedDebt}
         />
       )}
 
       {selectedDebt && (
-        <CollectDebtDialog
+        <DebtFlowDialog
           open={showCollectDebt}
           onOpenChange={(o) => { setShowCollectDebt(o); if (!o) setSelectedDebt(null); }}
-          debtId={selectedDebt.id}
-          customerName={(selectedDebt.customer as any)?.store_name || (selectedDebt.customer as any)?.name || ''}
-          totalDebtAmount={Number(selectedDebt.total_amount)}
-          paidAmountBefore={Number(selectedDebt.paid_amount)}
-          remainingAmount={Number(selectedDebt.remaining_amount)}
-          customerId={selectedDebt.customer_id}
-          customerPhone={(selectedDebt.customer as any)?.phone || null}
-          defaultAmount={selectedDebt.collection_amount ? Number(selectedDebt.collection_amount) : undefined}
-          collectionType={selectedDebt.collection_type}
-          collectionDays={selectedDebt.collection_days}
+          mode="collect"
+          debt={selectedDebt}
         />
       )}
 
       {selectedCollectedOperation && (
-        <CollectedDebtOperationDialog
+        <DebtFlowDialog
           open={showCollectedOperationDialog}
           onOpenChange={(o) => {
             setShowCollectedOperationDialog(o);
             if (!o) setSelectedCollectedOperation(null);
           }}
+          mode="collection_operation"
           collection={selectedCollectedOperation}
         />
       )}
@@ -2687,7 +2677,18 @@ const OrderDetailsDialog: React.FC<{ order: any; onClose: () => void; onCancelOr
           {/* Customer Info */}
           <div className="bg-muted/50 rounded-lg p-3 space-y-1">
             <div className="flex items-center gap-2">
-              <CustomerLabel customer={{ name: customer?.name, store_name: customer?.store_name, customer_type: customer?.customer_type }} compact />
+              <CustomerSummary
+                customer={{
+                  name: customer?.name,
+                  store_name: customer?.store_name,
+                  customer_type: customer?.customer_type,
+                  phone: customer?.phone,
+                  wilaya: customer?.wilaya,
+                }}
+                compact
+                showAvatar={false}
+                showMeta={false}
+              />
             </div>
             {customer?.phone && (
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -2950,15 +2951,19 @@ const CustomerList: React.FC<{
             {loadingFor === c.id ? <Loader2 className="w-4 h-4 animate-spin text-primary" /> : <User className="w-4 h-4 text-primary" />}
           </div>
           <div className="flex-1 min-w-0">
-            <CustomerLabel
+            <CustomerSummary
               customer={{
                 name: c.name,
                 store_name: c.store_name,
                 customer_type: c.customer_type,
                 sector_name: sector ? getLocalizedName(sector, language) : undefined,
                 zone_name: zone ? getLocalizedName(zone, language) : undefined,
+                phone: c.phone,
+                wilaya: c.wilaya,
               }}
-             />
+              showAvatar={false}
+              showMeta={false}
+            />
              {liveDistanceMap.has(c.id) && (
                <Badge className="text-[9px] px-1.5 py-0 h-4 bg-yellow-400 text-black border-0 font-medium">
                  📍 {liveDistanceMap.get(c.id)! >= 1000
@@ -3119,15 +3124,19 @@ const CollectedDebtOperationList: React.FC<{
             <button className="w-full p-3 text-right hover:bg-muted/20 transition-colors" onClick={() => onOpenDetails(operation)}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1 space-y-1">
-                  <CustomerLabel
+                  <CustomerSummary
                     customer={{
                       name: customer?.name,
                       store_name: customer?.store_name,
                       customer_type: customer?.customer_type,
                       sector_name: sector ? getLocalizedName(sector, language) : undefined,
                       zone_name: zone ? getLocalizedName(zone, language) : undefined,
+                      phone: customer?.phone,
+                      wilaya: customer?.wilaya,
                     }}
                     compact
+                    showAvatar={false}
+                    showMeta={false}
                   />
                   <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     <span className="inline-flex items-center gap-1">
@@ -3198,7 +3207,19 @@ const DebtList: React.FC<{ debts: DueDebt[]; onCollect: (d: DueDebt) => void; on
         <div key={debt.id} className="p-3 hover:bg-muted/50 transition-colors">
           <button className="w-full text-right" onClick={() => onCollect(debt)}>
             <div className="flex items-center justify-between">
-              <CustomerLabel customer={{ name: (debt.customer as any)?.name, store_name: (debt.customer as any)?.store_name, customer_type: (debt.customer as any)?.customer_type }} compact hideBadges />
+              <CustomerSummary
+                customer={{
+                  name: (debt.customer as any)?.name,
+                  store_name: (debt.customer as any)?.store_name,
+                  customer_type: (debt.customer as any)?.customer_type,
+                  phone: (debt.customer as any)?.phone,
+                  wilaya: (debt.customer as any)?.wilaya,
+                }}
+                compact
+                hideBadges
+                showAvatar={false}
+                showMeta={false}
+              />
               <span className="text-destructive font-bold">{Number(debt.remaining_amount).toLocaleString()} DA</span>
             </div>
             <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">

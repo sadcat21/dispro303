@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useLocation } from 'react-router-dom';
@@ -20,22 +20,20 @@ import { X, Plus } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { getLocalizedName } from '@/utils/sectorName';
-import { useMyOrders, useOrders as useAllOrders, useOrderItems, useAssignOrder, useDeleteOrder, useCancelOrder, useUpdateOrderStatus } from '@/hooks/useOrders';
+import { useMyOrders, useOrders as useAllOrders, useAssignOrder, useDeleteOrder, useCancelOrder, useUpdateOrderStatus } from '@/hooks/useOrders';
 import { format } from 'date-fns';
 import { ar, fr, enUS } from 'date-fns/locale';
 import PermissionGate from '@/components/auth/PermissionGate';
 import OrdersPrintView from '@/components/print/OrdersPrintView';
 import PrintOrdersDialog from '@/components/orders/PrintOrdersDialog';
-import CreateOrderDialog from '@/components/orders/CreateOrderDialog';
 import OrderSearchDialog from '@/components/orders/OrderSearchDialog';
 import CustomerActionDialog from '@/components/orders/CustomerActionDialog';
-import DirectSaleDialog from '@/components/warehouse/DirectSaleDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
+import OrderFlowDialog, { OrderDialogMode } from '@/components/orders/OrderFlowDialog';
 import { useTrackVisit } from '@/hooks/useVisitTracking';
 import { Customer } from '@/types/database';
 import { useIsElementHidden } from '@/hooks/useUIOverrides';
 import { useSectors } from '@/hooks/useSectors';
-import ModifyOrderDialog from '@/components/orders/ModifyOrderDialog';
-import DeliverySaleDialog from '@/components/orders/DeliverySaleDialog';
 import ManualPromoEntryDialog from '@/components/offers/ManualPromoEntryDialog';
 import { Edit } from 'lucide-react';
 import { useSelectedWorker } from '@/contexts/SelectedWorkerContext';
@@ -70,11 +68,14 @@ const OrdersContent: React.FC = () => {
     without_invoice: { label: t('orders.without_invoice'), icon: ReceiptText, color: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400' },
   };
 
-  const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showActionDialog, setShowActionDialog] = useState(false);
-  const [showDirectSaleDialog, setShowDirectSaleDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
+  const [salesHubTab, setSalesHubTab] = useState<'direct' | 'delivery'>('direct');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
-  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [orderDialogMode, setOrderDialogMode] = useState<OrderDialogMode>('create');
+  const [orderDialogOrder, setOrderDialogOrder] = useState<OrderWithDetails | null>(null);
+  const [orderDialogCustomerId, setOrderDialogCustomerId] = useState<string | null>(null);
   const [showAssignDialog, setShowAssignDialog] = useState(false);
   const [showSearchDialog, setShowSearchDialog] = useState(false);
   const [showPreviewDialog, setShowPreviewDialog] = useState(false);
@@ -86,9 +87,6 @@ const OrdersContent: React.FC = () => {
   const [confirmCancelOrderId, setConfirmCancelOrderId] = useState<string | null>(null);
   const [confirmDeleteOrderId, setConfirmDeleteOrderId] = useState<string | null>(null);
   const [customerIdFilter, setCustomerIdFilter] = useState<string | null>(null);
-  const [showModifyDialog, setShowModifyDialog] = useState(false);
-  const [modifyOrder, setModifyOrder] = useState<OrderWithDetails | null>(null);
-  const [showDeliverySaleDialog, setShowDeliverySaleDialog] = useState(false);
   const [pendingDeliveryOrder, setPendingDeliveryOrder] = useState<OrderWithDetails | null>(null);
   const [showManualPromoDialog, setShowManualPromoDialog] = useState(false);
 
@@ -157,11 +155,42 @@ const OrdersContent: React.FC = () => {
     });
   }, [rawOrders, contextWorkerId, contextWorkerCutoff]);
 
-  const { data: selectedOrderItems } = useOrderItems(selectedOrderId);
   const assignOrder = useAssignOrder();
   const deleteOrder = useDeleteOrder();
   const cancelOrder = useCancelOrder();
   const updateStatus = useUpdateOrderStatus();
+
+  const stockSource = isAdminOrBranchAdmin ? 'warehouse' : 'worker';
+
+  const { data: warehouseStockItems = [] } = useQuery({
+    queryKey: ['orders-warehouse-stock', activeBranch?.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('warehouse_stock')
+        .select('*, product:products(*)')
+        .eq('branch_id', activeBranch!.id)
+        .gt('quantity', 0);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: isAdminOrBranchAdmin && !!activeBranch?.id,
+  });
+
+  const { data: workerStockItems = [] } = useQuery({
+    queryKey: ['orders-worker-stock', workerId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('worker_stock')
+        .select('*, product:products(*)')
+        .eq('worker_id', workerId!)
+        .gt('quantity', 0);
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !isAdminOrBranchAdmin && !!workerId,
+  });
+
+  const saleStockItems = (stockSource === 'warehouse' ? warehouseStockItems : workerStockItems) || [];
 
   const handleUpdateStatus = async (orderId: string, status: import('@/types/database').OrderStatus) => {
     try {
@@ -174,7 +203,29 @@ const OrdersContent: React.FC = () => {
 
   const handleDeliverClick = (order: OrderWithDetails) => {
     setPendingDeliveryOrder(order);
-    setShowDeliverySaleDialog(true);
+    setSalesHubTab('delivery');
+    setShowSalesHubDialog(true);
+  };
+
+  const openCreateOrder = (customer?: Customer | null) => {
+    setOrderDialogMode('create');
+    setOrderDialogOrder(null);
+    setOrderDialogCustomerId(customer?.id || null);
+    setOrderDialogOpen(true);
+  };
+
+  const openOrderDetails = (order: OrderWithDetails) => {
+    setOrderDialogMode('details');
+    setOrderDialogOrder(order);
+    setOrderDialogCustomerId(null);
+    setOrderDialogOpen(true);
+  };
+
+  const openOrderEdit = (order: OrderWithDetails) => {
+    setOrderDialogMode('edit');
+    setOrderDialogOrder(order);
+    setOrderDialogCustomerId(null);
+    setOrderDialogOpen(true);
   };
 
   const { trackVisit } = useTrackVisit();
@@ -207,12 +258,13 @@ const OrdersContent: React.FC = () => {
 
       const action = location.state.action;
       if (action === 'sale') {
-        setShowDirectSaleDialog(true);
+        setSalesHubTab('direct');
+        setShowSalesHubDialog(true);
       } else if (action === 'delivery') {
         setCustomerIdFilter(location.state.customerId);
         setActiveTab('all'); // Show all orders for this customer regardless of status
       } else {
-        setShowCreateDialog(true);
+        openCreateOrder({ id: location.state.customerId } as Customer);
       }
 
       // Optional: Clear state to avoid reopening on refresh
@@ -578,20 +630,36 @@ const OrdersContent: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      <CreateOrderDialog
-        open={showCreateDialog}
+      <OrderFlowDialog
+        open={orderDialogOpen}
         onOpenChange={(open) => {
-          setShowCreateDialog(open);
-          if (!open) setSelectedCustomer(null);
+          setOrderDialogOpen(open);
+          if (!open) {
+            setOrderDialogOrder(null);
+            setOrderDialogCustomerId(null);
+          }
         }}
-        initialCustomerId={selectedCustomer?.id}
+        mode={orderDialogMode}
+        order={orderDialogOrder}
+        initialCustomerId={orderDialogCustomerId ?? undefined}
       />
 
-      <DirectSaleDialog
-        open={showDirectSaleDialog}
-        onOpenChange={setShowDirectSaleDialog}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={(open) => {
+          setShowSalesHubDialog(open);
+          if (!open) setPendingDeliveryOrder(null);
+        }}
         initialCustomerId={selectedCustomer?.id}
-        stockItems={[]}
+        initialTab={salesHubTab}
+        initialDeliveryOrder={pendingDeliveryOrder}
+        stockSource={stockSource}
+        stockItems={saleStockItems.map((s: any) => ({
+          id: s.id,
+          product_id: s.product_id,
+          quantity: s.quantity,
+          product: s.product,
+        }))}
       />
 
       <CustomerActionDialog
@@ -599,12 +667,12 @@ const OrdersContent: React.FC = () => {
         onOpenChange={setShowActionDialog}
         directAction="order"
         onOrder={(customer) => {
-          setSelectedCustomer(customer);
-          setShowCreateDialog(true);
+          openCreateOrder(customer);
         }}
         onSale={(customer) => {
           setSelectedCustomer(customer);
-          setShowDirectSaleDialog(true);
+          setSalesHubTab('direct');
+          setShowSalesHubDialog(true);
         }}
         onVisitOnly={async (customer) => {
           try {
@@ -723,11 +791,10 @@ const OrdersContent: React.FC = () => {
                       <button
                         className="font-bold hover:text-primary hover:underline transition-colors text-right"
                         onClick={() => {
-                          setSelectedCustomer(order.customer as Customer);
-                          setShowCreateDialog(true);
+                          openCreateOrder(order.customer as Customer);
                         }}
                       >
-                        <CustomerLabel
+                        <CustomerSummary
                           customer={{
                             name: order.customer?.name,
                             store_name: order.customer?.store_name,
@@ -735,6 +802,8 @@ const OrdersContent: React.FC = () => {
                             sector_name: order.customer?.sector_id ? sectorMap.get(order.customer.sector_id) : undefined,
                           }}
                           compact
+                          showAvatar={false}
+                          showMeta={false}
                         />
                       </button>
                     </div>
@@ -787,8 +856,7 @@ const OrdersContent: React.FC = () => {
                       variant="outline"
                       size="sm"
                       onClick={() => {
-                        setSelectedOrderId(order.id);
-                        setShowDetailsDialog(true);
+                        openOrderDetails(order);
                       }}
                     >
                       <Package className="w-4 h-4" />
@@ -799,9 +867,7 @@ const OrdersContent: React.FC = () => {
                         variant="outline"
                         size="sm"
                         onClick={() => {
-                          setModifyOrder(order);
-                          setSelectedOrderId(order.id);
-                          setShowModifyDialog(true);
+                          openOrderEdit(order);
                         }}
                       >
                         <Edit className="w-4 h-4" />
@@ -914,50 +980,6 @@ const OrdersContent: React.FC = () => {
         )}
       </div>
 
-      {/* Order Details Dialog */}
-      <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
-        <DialogContent className="max-w-sm" dir={language === 'ar' ? 'rtl' : 'ltr'}>
-          <DialogHeader>
-            <DialogTitle>{t('orders.details')}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            {selectedOrderItems?.map((item) => (
-              <div key={item.id} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
-                <div className="flex-1 min-w-0">
-                  <span className="font-medium">
-                    {item.product?.name}
-                    {item.gift_quantity > 0 && (
-                      <Badge variant="outline" className="ms-1 text-[10px] px-1 py-0 border-green-500 text-green-600">
-                        <Gift className="w-3 h-3 ms-0.5" />
-                        {item.gift_quantity} {t('offers.unit_box')} {t('common.free')}
-                      </Badge>
-                    )}
-                  </span>
-                  {(item.unit_price || 0) > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      {Number(item.unit_price).toLocaleString()} دج × {item.quantity - (item.gift_quantity || 0)} = {Number(item.total_price || 0).toLocaleString()} دج
-                    </p>
-                  )}
-                </div>
-                <Badge variant="secondary">{item.quantity} {t('common.box')}</Badge>
-              </div>
-            ))}
-            {(() => {
-              const selectedOrder = orders.find(o => o.id === selectedOrderId);
-              return selectedOrder?.total_amount && Number(selectedOrder.total_amount) > 0 ? (
-                <div className="flex items-center justify-between p-3 bg-primary/10 rounded-lg font-bold">
-                  <span>{t('orders.grand_total')}</span>
-                  <span className="text-primary">{Number(selectedOrder.total_amount).toLocaleString()} دج</span>
-                </div>
-              ) : null;
-            })()}
-            {(!selectedOrderItems || selectedOrderItems.length === 0) && (
-              <p className="text-center text-muted-foreground py-4">{t('orders.no_products')}</p>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
       {/* Assign Worker Picker Dialog */}
       <WorkerPickerDialog
         open={showAssignDialog}
@@ -1007,31 +1029,6 @@ const OrdersContent: React.FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Delivery Sale Dialog */}
-      {pendingDeliveryOrder && (
-        <DeliverySaleDialog
-          open={showDeliverySaleDialog}
-          onOpenChange={(open) => {
-            setShowDeliverySaleDialog(open);
-            if (!open) setTimeout(() => setPendingDeliveryOrder(null), 2000);
-          }}
-          order={pendingDeliveryOrder}
-        />
-      )}
-
-      {/* Modify Order Dialog */}
-      {modifyOrder && (
-        <ModifyOrderDialog
-          open={showModifyDialog}
-          onOpenChange={(open) => {
-            setShowModifyDialog(open);
-            if (!open) setModifyOrder(null);
-          }}
-          order={modifyOrder}
-          orderItems={selectedOrderItems || []}
-        />
-      )}
 
       <ManualPromoEntryDialog
         open={showManualPromoDialog}

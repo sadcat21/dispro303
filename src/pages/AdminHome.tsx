@@ -14,7 +14,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useIsElementHidden } from '@/hooks/useUIOverrides';
 import InvoiceRequestDialog from '@/components/treasury/InvoiceRequestDialog';
-import CreateOrderDialog from '@/components/orders/CreateOrderDialog';
+import OrderFlowDialog from '@/components/orders/OrderFlowDialog';
 import WorkerGiftsSummaryDialog from '@/components/accounting/WorkerGiftsSummaryDialog';
 import ManualPromoEntryDialog from '@/components/offers/ManualPromoEntryDialog';
 import FactoryReceiptQuickDialog from '@/components/stock/FactoryReceiptQuickDialog';
@@ -61,6 +61,7 @@ const itemColors: Record<string, { bg: string; icon: string; border: string }> =
   '/load-stock': { bg: 'bg-green-50', icon: 'text-green-600', border: 'border-green-200' },
   '/customers': { bg: 'bg-blue-50', icon: 'text-blue-700', border: 'border-blue-200' },
   '/customer-accounts': { bg: 'bg-cyan-50', icon: 'text-cyan-600', border: 'border-cyan-200' },
+  '/customer-journey': { bg: 'bg-sky-50', icon: 'text-sky-700', border: 'border-sky-200' },
   '/nearby-stores': { bg: 'bg-sky-50', icon: 'text-sky-600', border: 'border-sky-200' },
   '/promo-table': { bg: 'bg-orange-50', icon: 'text-orange-600', border: 'border-orange-200' },
   '/product-offers': { bg: 'bg-rose-50', icon: 'text-rose-600', border: 'border-rose-200' },
@@ -321,6 +322,7 @@ const AdminHome: React.FC = () => {
       items: [
         { path: '/customers', icon: UserCheck, label: t('nav.customers') },
         { path: '/customer-accounts', icon: UserCog, label: t('nav.customer_accounts') },
+        { path: '/customer-journey', icon: Activity, label: t('nav.customer_journey') },
         { path: '/nearby-stores', icon: Store, label: t('nav.nearby_stores') },
       ],
     },
@@ -541,7 +543,7 @@ const AdminHome: React.FC = () => {
 
       {/* Dialogs */}
       <InvoiceRequestDialog open={invoiceRequestOpen} onOpenChange={setInvoiceRequestOpen} />
-      <CreateOrderDialog open={showCreateOrder} onOpenChange={setShowCreateOrder} />
+      <OrderFlowDialog open={showCreateOrder} onOpenChange={setShowCreateOrder} mode="create" />
       <ManualPromoEntryDialog open={manualPromoOpen} onOpenChange={setManualPromoOpen} />
       <FactoryReceiptQuickDialog open={factoryReceiptOpen} onOpenChange={setFactoryReceiptOpen} />
       <FactoryDeliveryQuickDialog open={factoryDeliveryOpen} onOpenChange={setFactoryDeliveryOpen} />

@@ -38,6 +38,8 @@ export const PERMISSION_CATEGORIES: Record<PermissionCategory, string> = {
 };
 
 export const RESOURCE_NAMES: Record<string, string> = {
+  gps: 'GPS',
+  pricing: 'التسعير',
   home: 'الرئيسية',
   my_promos: 'عملياتي',
   workers: 'العمال',

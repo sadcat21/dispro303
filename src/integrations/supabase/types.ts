@@ -2610,6 +2610,7 @@ export type Database = {
         Row: {
           created_at: string
           gift_offer_id: string | null
+          gift_pieces: number
           gift_quantity: number
           id: string
           invoice_payment_method: string | null
@@ -2627,6 +2628,7 @@ export type Database = {
         Insert: {
           created_at?: string
           gift_offer_id?: string | null
+          gift_pieces?: number
           gift_quantity?: number
           id?: string
           invoice_payment_method?: string | null
@@ -2644,6 +2646,7 @@ export type Database = {
         Update: {
           created_at?: string
           gift_offer_id?: string | null
+          gift_pieces?: number
           gift_quantity?: number
           id?: string
           invoice_payment_method?: string | null

@@ -6,13 +6,13 @@ import { Button } from '@/components/ui/button';
 import { Package, Loader2, ShoppingBag, TrendingDown, TrendingUp, Gift } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
-import DirectSaleDialog from '@/components/warehouse/DirectSaleDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
 import { useIsElementHidden } from '@/hooks/useUIOverrides';
 
 const MyStock: React.FC = () => {
   const { t } = useLanguage();
   const { workerId } = useAuth();
-  const [showSaleDialog, setShowSaleDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
   const isDirectSaleHidden = useIsElementHidden('button', 'stock_direct_sale');
 
   const { data: stockItems, isLoading } = useQuery({
@@ -230,7 +230,7 @@ const MyStock: React.FC = () => {
           {t('stock.my_stock')}
         </h2>
         {hasStock && !isDirectSaleHidden && (
-          <Button size="sm" onClick={() => setShowSaleDialog(true)}>
+          <Button size="sm" onClick={() => setShowSalesHubDialog(true)}>
             <ShoppingBag className="w-4 h-4 ml-1" />
             {t('stock.direct_sale')}
           </Button>
@@ -294,9 +294,11 @@ const MyStock: React.FC = () => {
         </div>
       )}
 
-      <DirectSaleDialog
-        open={showSaleDialog}
-        onOpenChange={setShowSaleDialog}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={setShowSalesHubDialog}
+        initialTab="direct"
+        stockSource="worker"
         stockItems={(stockItems || []).map(s => ({
           id: s.id,
           product_id: s.product_id,

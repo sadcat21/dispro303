@@ -27,8 +27,8 @@ import { ar, fr, enUS } from 'date-fns/locale';
 import LazyCustomerLocationView from '@/components/map/LazyCustomerLocationView';
 import LazyNavigationMapView from '@/components/map/LazyNavigationMapView';
 import OrderSearchDialog from '@/components/orders/OrderSearchDialog';
-import ModifyOrderDialog from '@/components/orders/ModifyOrderDialog';
-import DeliverySaleDialog from '@/components/orders/DeliverySaleDialog';
+import OrderFlowDialog from '@/components/orders/OrderFlowDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
 import CheckVerificationDialog from '@/components/orders/CheckVerificationDialog';
 import { useIsElementHidden } from '@/hooks/useUIOverrides';
 import { getLocalizedName } from '@/utils/sectorName';
@@ -44,7 +44,7 @@ import PrintOrdersDialog from '@/components/orders/PrintOrdersDialog';
 import OrdersPrintView from '@/components/print/OrdersPrintView';
 import { PrintColumnConfig } from '@/components/print/PrintColumnsConfigDialog';
 import { Eye } from 'lucide-react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { isAdminRole } from '@/lib/utils';
 
 type TabStatus = 'all' | OrderStatus;
@@ -80,7 +80,7 @@ const MyDeliveries: React.FC = () => {
   const [showDetailsDialog, setShowDetailsDialog] = useState(false);
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [showSearchDialog, setShowSearchDialog] = useState(false);
-  const [showDeliverySaleDialog, setShowDeliverySaleDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
   const [pendingDeliveryOrder, setPendingDeliveryOrder] = useState<OrderWithDetails | null>(null);
   const [modifyOrder, setModifyOrder] = useState<OrderWithDetails | null>(null);
   const [confirmCancelOrderId, setConfirmCancelOrderId] = useState<string | null>(null);
@@ -395,7 +395,7 @@ const MyDeliveries: React.FC = () => {
 
   const handleDeliverClick = (order: OrderWithDetails) => {
     setPendingDeliveryOrder(order);
-    setShowDeliverySaleDialog(true);
+    setShowSalesHubDialog(true);
   };
 
   const checkLocationForOrder = async (order: OrderWithDetails): Promise<boolean> => {
@@ -648,7 +648,7 @@ const MyDeliveries: React.FC = () => {
                 {/* Customer Info */}
                 <div className="flex items-center gap-2 mb-0.5">
                   <Store className="w-4 h-4 text-muted-foreground shrink-0" />
-                  <CustomerLabel
+                  <CustomerSummary
                     customer={{
                       name: order.customer?.name,
                       store_name: order.customer?.store_name,
@@ -656,6 +656,8 @@ const MyDeliveries: React.FC = () => {
                       sector_name: (order.customer as any)?.sector ? getLocalizedName((order.customer as any).sector, language) : undefined,
                     }}
                     compact
+                    showAvatar={false}
+                    showMeta={false}
                   />
                   {customerDebts[order.customer_id] && (
                     <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />
@@ -1171,7 +1173,7 @@ const MyDeliveries: React.FC = () => {
                 {/* Store name + sector */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <Store className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                  <CustomerLabel
+                  <CustomerSummary
                     customer={{
                       name: selectedOrder.customer.name,
                       store_name: selectedOrder.customer.store_name,
@@ -1179,6 +1181,8 @@ const MyDeliveries: React.FC = () => {
                       sector_name: (selectedOrder.customer as any)?.sector ? getLocalizedName((selectedOrder.customer as any).sector, language) : undefined,
                     }}
                     compact
+                    showAvatar={false}
+                    showMeta={false}
                   />
                   {customerDebts[selectedOrder.customer_id] && (
                     <AlertTriangle className="w-3.5 h-3.5 text-destructive shrink-0" />
@@ -1306,19 +1310,28 @@ const MyDeliveries: React.FC = () => {
         </DialogContent>
       </Dialog>
       
-      {pendingDeliveryOrder && (
-        <DeliverySaleDialog
-          open={showDeliverySaleDialog}
-          onOpenChange={(open) => {
-            setShowDeliverySaleDialog(open);
-            if (!open) setTimeout(() => setPendingDeliveryOrder(null), 2000);
-          }}
-          order={pendingDeliveryOrder}
-        />
-      )}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={(open) => {
+          setShowSalesHubDialog(open);
+          if (!open) setTimeout(() => setPendingDeliveryOrder(null), 2000);
+        }}
+        initialTab="delivery"
+        initialDeliveryOrder={pendingDeliveryOrder}
+        hideDirectTab
+        stockSource="worker"
+        stockItems={[]}
+      />
       
       {modifyOrder && (
-        <ModifyOrderWithItems order={modifyOrder} onClose={() => setModifyOrder(null)} />
+        <OrderFlowDialog
+          open={!!modifyOrder}
+          onOpenChange={(open) => {
+            if (!open) setModifyOrder(null);
+          }}
+          mode="edit"
+          order={modifyOrder}
+        />
       )}
       
       {/* Check Verification Dialog for completing later */}
@@ -1500,19 +1513,6 @@ const MyDeliveries: React.FC = () => {
       {/* Worker Load Request Dialog */}
       <WorkerLoadRequestDialog open={showLoadRequestDialog} onOpenChange={setShowLoadRequestDialog} />
     </div>
-  );
-};
-
-// Wrapper to fetch order items for ModifyOrderDialog
-const ModifyOrderWithItems: React.FC<{ order: OrderWithDetails; onClose: () => void }> = ({ order, onClose }) => {
-  const { data: items } = useOrderItems(order.id);
-  return (
-    <ModifyOrderDialog
-      open={true}
-      onOpenChange={(open) => !open && onClose()}
-      order={order}
-      orderItems={items || []}
-    />
   );
 };
 

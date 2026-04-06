@@ -108,6 +108,7 @@ export interface OrderItem {
   unit_price: number | null;
   total_price: number | null;
   gift_quantity: number;
+  gift_pieces: number;
   gift_offer_id: string | null;
   payment_type: string | null;
   invoice_payment_method: string | null;

@@ -14,8 +14,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button';
 import { format } from 'date-fns';
 import { Search, Filter, ArrowRightLeft, UserCheck, CreditCard, Package, Printer, Plus, DollarSign, Clock, Users, ChevronLeft, Truck, ShoppingCart, CheckCircle2, XCircle, Loader2, MapPin, Ban, Lock, UserX, HandCoins, Receipt, Pencil } from 'lucide-react';
-import ModifyOrderDialog from '@/components/orders/ModifyOrderDialog';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import OrderFlowDialog from '@/components/orders/OrderFlowDialog';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 
 const EVENT_TYPE_CONFIG: Record<string, { label: string; icon: React.ElementType; color: string }> = {
   created: { label: 'إنشاء طلبية', icon: Plus, color: 'bg-green-100 text-green-700 border-green-200' },
@@ -536,7 +536,12 @@ const OrderTracking: React.FC<{ workerMode?: boolean }> = ({ workerMode = false 
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         {order.customerData ? (
-                          <CustomerLabel customer={order.customerData} />
+                          <CustomerSummary
+                            customer={order.customerData}
+                            compact
+                            showAvatar={false}
+                            showMeta={false}
+                          />
                         ) : (
                           <span className="font-medium text-sm">{order.customerName}</span>
                         )}
@@ -602,7 +607,12 @@ const OrderTracking: React.FC<{ workerMode?: boolean }> = ({ workerMode = false 
               </Badge>
             </div>
             {selectedOrder?.customerData && (
-              <CustomerLabel customer={selectedOrder.customerData} />
+              <CustomerSummary
+                customer={selectedOrder.customerData}
+                compact
+                showAvatar={false}
+                showMeta={false}
+              />
             )}
             <div className="flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
               {selectedOrder?.createdAt && (
@@ -636,7 +646,7 @@ const OrderDetailsContent: React.FC<{ order: GroupedOrder }> = ({ order }) => {
   const { data: orderItems, isLoading: itemsLoading } = useOrderItems(order.orderId);
   const [showModify, setShowModify] = useState(false);
 
-  // Fetch full order for ModifyOrderDialog
+  // Fetch full order for OrderFlowDialog
   const { data: fullOrder } = useQuery({
     queryKey: ['order-full', order.orderId],
     queryFn: async () => {
@@ -837,12 +847,12 @@ const OrderDetailsContent: React.FC<{ order: GroupedOrder }> = ({ order }) => {
       </div>
 
       {/* Modify Order Dialog */}
-      {showModify && fullOrder && orderItems && (
-        <ModifyOrderDialog
+      {showModify && fullOrder && (
+        <OrderFlowDialog
           open={showModify}
           onOpenChange={(open) => setShowModify(open)}
+          mode="edit"
           order={fullOrder as any}
-          orderItems={orderItems as any}
         />
       )}
     </div>

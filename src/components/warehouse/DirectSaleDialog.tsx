@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import ReceiptDialog from '@/components/printing/ReceiptDialog';
 import AddCustomerDialog from '@/components/promo/AddCustomerDialog';
@@ -15,7 +15,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import CustomerPickerDialog from '@/components/orders/CustomerPickerDialog';
 import {
   Truck, Plus, Loader2, User,
-  Receipt, ReceiptText, XCircle, Package, Check, ChevronsUpDown, Stamp, Gift
+  Receipt, ReceiptText, XCircle, Package, Check, ChevronsUpDown, Stamp, Gift, Pencil
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
@@ -26,7 +26,7 @@ import { Customer, Product, PaymentType, PriceSubType, Sector } from '@/types/da
 import { InvoicePaymentMethod } from '@/types/stamp';
 import { useActiveStampTiers, calculateStampAmount } from '@/hooks/useStampTiers';
 import { useCreateDebt } from '@/hooks/useCustomerDebts';
-import ProductQuantityDialog from '@/components/orders/ProductQuantityDialog';
+import ProductQuantityDialog, { PerItemPricing } from '@/components/orders/ProductQuantityDialog';
 import InvoicePaymentMethodSelect from '@/components/orders/InvoicePaymentMethodSelect';
 import ProductPriceBadge from '@/components/orders/ProductPriceBadge';
 import { useCompanyInfo } from '@/hooks/useCompanyInfo';
@@ -52,6 +52,8 @@ interface DirectSaleDialogProps {
   stockItems: StockItem[];
   initialCustomerId?: string;
   stockSource?: 'worker' | 'warehouse';
+  embedded?: boolean;
+  hideHeader?: boolean;
 }
 
 interface OrderItemWithPrice {
@@ -59,6 +61,8 @@ interface OrderItemWithPrice {
   quantity: number;
   unitPrice: number;
   totalPrice: number;
+  customUnitPrice?: number;
+  isUnitSale?: boolean;
   giftQuantity?: number;
   giftPieces?: number;
   giftOfferId?: string;
@@ -68,7 +72,15 @@ interface OrderItemWithPrice {
   piecesPerBox?: number;
 }
 
-const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange, stockItems, initialCustomerId, stockSource = 'worker' }) => {
+const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({
+  open,
+  onOpenChange,
+  stockItems,
+  initialCustomerId,
+  stockSource = 'worker',
+  embedded = false,
+  hideHeader = false,
+}) => {
   const { workerId, activeBranch, user, activeRole } = useAuth();
   const isWarehouseManager = activeRole?.custom_role_code === 'warehouse_manager';
   const { data: workerPrintInfo } = useWorkerPrintInfo(workerId);
@@ -104,6 +116,14 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
   const [customerDropdownOpen, setCustomerDropdownOpen] = useState(false);
   const [showQuantityDialog, setShowQuantityDialog] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [editingProductMode, setEditingProductMode] = useState(false);
+  const [editingTargetProductId, setEditingTargetProductId] = useState<string | null>(null);
+  const [editingInitialQuantity, setEditingInitialQuantity] = useState(1);
+  const [editingInitialGiftPieces, setEditingInitialGiftPieces] = useState(0);
+  const [editingInitialOfferApplied, setEditingInitialOfferApplied] = useState(false);
+  const [editingInitialIsUnitSale, setEditingInitialIsUnitSale] = useState(false);
+  const [editingInitialCustomUnitPrice, setEditingInitialCustomUnitPrice] = useState<number | undefined>(undefined);
+  const [editingInitialGiftOfferId, setEditingInitialGiftOfferId] = useState<string | undefined>(undefined);
   const [showPaymentDialog, setShowPaymentDialog] = useState(false);
   const [showReceiptDialog, setShowReceiptDialog] = useState(false);
   const [receiptData, setReceiptData] = useState<any>(null);
@@ -251,26 +271,71 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
     return basePrice;
   }, [paymentType, priceSubType, getEffectiveProduct]);
 
+  const resolveCustomSalePrice = useCallback((product: Product, baseUnitPrice: number, unitSale: boolean): number => {
+    const piecesPerBox = product.pieces_per_box || 1;
+    const weightPerBox = product.weight_per_box || 1;
+    const pricingUnit = product.pricing_unit || 'box';
+    if (pricingUnit === 'kg') {
+      const boxPrice = baseUnitPrice * weightPerBox;
+      return unitSale ? boxPrice / piecesPerBox : boxPrice;
+    }
+    if (pricingUnit === 'unit') {
+      const piecePrice = baseUnitPrice;
+      return unitSale ? piecePrice : piecePrice * piecesPerBox;
+    }
+    const boxPrice = baseUnitPrice;
+    return unitSale ? boxPrice / piecesPerBox : boxPrice;
+  }, []);
+
   const getAvailable = (productId: string) =>
     stockItems.find(s => s.product_id === productId)?.quantity || 0;
 
   // Product handlers
-  const handleProductClick = (product: Product) => {
+  const handleEditItem = (item: OrderItemWithPrice) => {
+    const product = allProducts.find(p => p.id === item.productId) || availableProducts.find(p => p.id === item.productId);
+    if (!product) return;
+    const piecesPerBox = item.piecesPerBox ?? product.pieces_per_box ?? 1;
+    const paidQuantity = Math.max(1, item.quantity - (item.giftQuantity || 0));
+    const totalGiftPieces = item.isUnitSale ? 0 : ((item.giftQuantity || 0) * piecesPerBox + (item.giftPieces || 0));
+
+    setEditingProductMode(true);
+    setEditingTargetProductId(item.productId);
+    setEditingInitialQuantity(paidQuantity);
+    setEditingInitialGiftPieces(totalGiftPieces);
+    setEditingInitialOfferApplied(!item.isUnitSale && ((item.giftQuantity || 0) > 0 || (item.giftPieces || 0) > 0));
+    setEditingInitialIsUnitSale(!!item.isUnitSale);
+    setEditingInitialCustomUnitPrice(item.customUnitPrice);
+    setEditingInitialGiftOfferId(item.giftOfferId);
     setSelectedProduct(product);
     setShowQuantityDialog(true);
   };
 
-  const handleAddProductWithQuantity = (productId: string, quantity: number, giftInfo?: any, isUnitSale?: boolean) => {
+  const handleProductClick = (product: Product) => {
+    const existingItem = orderItems.find(item => item.productId === product.id);
+    if (existingItem) {
+      handleEditItem(existingItem);
+      return;
+    }
+    setEditingProductMode(false);
+    setEditingTargetProductId(null);
+    setSelectedProduct(product);
+    setShowQuantityDialog(true);
+  };
+
+  const handleAddProductWithQuantity = (productId: string, quantity: number, giftInfo?: any, isUnitSale?: boolean, perItemPricing?: PerItemPricing) => {
     const product = availableProducts.find(p => p.id === productId);
     if (!product) return;
 
     const available = getAvailable(productId);
+    const customUnitPrice = perItemPricing?.customUnitPrice;
+    const customSalePrice = customUnitPrice !== undefined ? resolveCustomSalePrice(product, customUnitPrice, !!isUnitSale) : undefined;
 
     if (isUnitSale) {
       const boxPrice = getProductPrice(product);
-      const piecePrice = product.pieces_per_box > 0 ? boxPrice / product.pieces_per_box : boxPrice;
+      const basePiecePrice = product.pieces_per_box > 0 ? boxPrice / product.pieces_per_box : boxPrice;
+      const piecePrice = customSalePrice ?? basePiecePrice;
       const totalPrice = piecePrice * quantity;
-      setOrderItems(prev => [...prev, { productId, quantity, unitPrice: piecePrice, totalPrice }]);
+      setOrderItems(prev => [...prev, { productId, quantity, unitPrice: piecePrice, totalPrice, customUnitPrice, isUnitSale: true }]);
       return;
     }
 
@@ -287,17 +352,18 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
         availableQuantity: available,
         originalGift: giftInfo ? { giftQuantity: giftInfo.giftQuantity || 0, giftPieces: giftInfo.giftPieces || 0, offerId: giftInfo.offerId } : null,
         deliveredGift: { giftQuantity: deliveredGiftBoxes, giftPieces: deliveredGiftPieces },
+        customUnitPrice,
       });
       setShowOverflowDialog(true);
       return;
     }
 
-    const unitPrice = getProductPrice(product);
+    const unitPrice = customSalePrice ?? getProductPrice(product);
     const giftQuantity = giftInfo?.giftQuantity || 0;
     const paidQuantity = quantity - giftQuantity;
 
     setOrderItems(prev => {
-      const existing = prev.find(item => item.productId === productId);
+      const existing = prev.find(item => item.productId === productId && !item.customUnitPrice && !customUnitPrice);
       if (existing) {
         const newQuantity = Math.min(existing.quantity + quantity, available + giftQuantity);
         const newPaid = Math.max(0, newQuantity - giftQuantity);
@@ -307,8 +373,60 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
             : item
         );
       }
-      return [...prev, { productId, quantity, unitPrice, totalPrice: paidQuantity * unitPrice, giftQuantity: giftQuantity || undefined, giftPieces: giftInfo?.giftPieces || undefined, giftOfferId: giftInfo?.offerId }];
+      return [...prev, { productId, quantity, unitPrice, totalPrice: paidQuantity * unitPrice, customUnitPrice, giftQuantity: giftQuantity || undefined, giftPieces: giftInfo?.giftPieces || undefined, giftOfferId: giftInfo?.offerId }];
     });
+  };
+
+  const handleEditProductWithQuantity = (
+    productId: string,
+    quantity: number,
+    giftInfo?: any,
+    isUnitSale?: boolean,
+    perItemPricing?: PerItemPricing
+  ) => {
+    const product = availableProducts.find(p => p.id === productId) || allProducts.find(p => p.id === productId);
+    if (!product) return;
+
+    const customUnitPrice = perItemPricing?.customUnitPrice;
+    const customSalePrice = customUnitPrice !== undefined ? resolveCustomSalePrice(product, customUnitPrice, !!isUnitSale) : undefined;
+
+    if (isUnitSale) {
+      const boxPrice = getProductPrice(product);
+      const basePiecePrice = product.pieces_per_box > 0 ? boxPrice / product.pieces_per_box : boxPrice;
+      const piecePrice = customSalePrice ?? basePiecePrice;
+      const totalPrice = piecePrice * quantity;
+      setOrderItems(prev => prev.map(item => item.productId === productId ? {
+        ...item,
+        quantity,
+        unitPrice: piecePrice,
+        totalPrice,
+        customUnitPrice,
+        isUnitSale: true,
+        giftQuantity: 0,
+        giftPieces: 0,
+        giftOfferId: undefined,
+      } : item));
+    } else {
+      const unitPrice = customSalePrice ?? getProductPrice(product);
+      const giftQuantity = giftInfo?.giftQuantity || 0;
+      const giftPieces = giftInfo?.giftPieces || 0;
+      const paidQuantity = Math.max(0, quantity - giftQuantity);
+      const totalPrice = paidQuantity * unitPrice;
+      setOrderItems(prev => prev.map(item => item.productId === productId ? {
+        ...item,
+        quantity,
+        unitPrice,
+        totalPrice,
+        customUnitPrice,
+        isUnitSale: false,
+        giftQuantity: giftQuantity || undefined,
+        giftPieces: giftPieces || undefined,
+        giftOfferId: giftInfo?.offerId ?? item.giftOfferId,
+      } : item));
+    }
+
+    setEditingProductMode(false);
+    setEditingTargetProductId(null);
   };
 
   // Sync function for gift calculation from overflow dialog
@@ -325,7 +443,9 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
   ) => {
     if (!overflowData?.product) return;
     const product = overflowData.product;
-    const unitPrice = getProductPrice(product);
+    const unitPrice = overflowData.customUnitPrice !== undefined
+      ? resolveCustomSalePrice(product, overflowData.customUnitPrice, false)
+      : getProductPrice(product);
     const giftQuantity = giftInfo?.giftQuantity || 0;
     const totalQty = deliveredQty + giftQuantity;
     const paidQty = deliveredQty;
@@ -335,6 +455,7 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
       quantity: totalQty,
       unitPrice,
       totalPrice: paidQty * unitPrice,
+      customUnitPrice: overflowData.customUnitPrice,
       giftQuantity: giftQuantity || undefined,
       giftPieces: giftInfo?.giftPieces || undefined,
       giftOfferId: giftInfo?.offerId,
@@ -390,9 +511,15 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
       setOrderItems(prev => prev.map(item => {
         const product = availableProducts.find(p => p.id === item.productId);
         if (product) {
-          const unitPrice = getProductPrice(product);
+          const baseBoxPrice = getProductPrice(product);
+          const basePiecePrice = product.pieces_per_box > 0 ? baseBoxPrice / product.pieces_per_box : baseBoxPrice;
+          const fallbackUnitPrice = item.isUnitSale ? basePiecePrice : baseBoxPrice;
+          const unitPrice = item.customUnitPrice !== undefined
+            ? resolveCustomSalePrice(product, item.customUnitPrice, !!item.isUnitSale)
+            : fallbackUnitPrice;
           const paidQuantity = item.quantity - (item.giftQuantity || 0);
-          return { ...item, unitPrice, totalPrice: paidQuantity * unitPrice };
+          const totalPrice = item.isUnitSale ? unitPrice * item.quantity : paidQuantity * unitPrice;
+          return { ...item, unitPrice, totalPrice };
         }
         return item;
       }));
@@ -702,18 +829,21 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
     }
   };
 
-  return (
+  const content = (
     <>
-      <Dialog open={open} onOpenChange={handleClose}>
-        <DialogContent className="max-w-lg max-h-[90vh] p-0 gap-0 overflow-hidden" dir={dir}>
-          <DialogHeader className="p-4 pb-2 border-b">
+      {!hideHeader && (
+        <DialogHeader className="p-4 pb-2 border-b">
             <DialogTitle className="flex items-center gap-2">
               <Truck className="w-5 h-5" />
               {isWarehouseManager ? 'بيع مخزن - Vente Dépôt' : t('stock.direct_sale')}
             </DialogTitle>
-          </DialogHeader>
+        </DialogHeader>
+      )}
 
-          <div className="flex-1 overflow-y-auto overscroll-contain px-4" style={{ WebkitOverflowScrolling: 'touch', maxHeight: 'calc(90vh - 8rem)' }}>
+       <div
+         className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4"
+         style={embedded ? { WebkitOverflowScrolling: 'touch' } : { WebkitOverflowScrolling: 'touch', maxHeight: 'calc(90vh - 8rem)' }}
+       >
             <div className="py-4 space-y-5">
               {/* Customer Section */}
               <section className="space-y-3">
@@ -731,23 +861,17 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
                       {t('common.loading')}
                     </span>
                   ) : selectedCustomer ? (
-                    <span className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-xs font-bold">
-                        {(selectedCustomer.store_name || selectedCustomer.name)?.charAt(0) || '?'}
-                      </div>
-                      <CustomerLabel
-                        customer={{
-                          name: selectedCustomer.name,
-                          store_name: selectedCustomer.store_name,
-                          customer_type: selectedCustomer.customer_type,
-                          sector_name: sectors?.find(s => s.id === selectedCustomer.sector_id)?.name,
-                        }}
-                        compact
-                      />
-                      {selectedCustomer.wilaya && (
-                        <span className="text-xs text-muted-foreground">({selectedCustomer.wilaya})</span>
-                      )}
-                    </span>
+                    <CustomerSummary
+                      customer={{
+                        name: selectedCustomer.name,
+                        store_name: selectedCustomer.store_name,
+                        customer_type: selectedCustomer.customer_type,
+                        sector_name: sectors?.find(s => s.id === selectedCustomer.sector_id)?.name,
+                      }}
+                      compact
+                      avatarSize="sm"
+                      showMeta={false}
+                    />
                   ) : (
                     <span className="text-muted-foreground">{t('orders.select_customer')}</span>
                   )}
@@ -779,24 +903,18 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
                 {/* Selected Customer Info */}
                 {selectedCustomer && (
                   <div className="p-3 bg-muted/50 rounded-lg">
-                    <div className="flex items-center gap-2">
-                      <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-primary-foreground font-bold">
-                        {(selectedCustomer.store_name || selectedCustomer.name)?.charAt(0) || '?'}
-                      </div>
-                      <div>
-                        <CustomerLabel
-                          customer={{
-                            name: selectedCustomer.name,
-                            store_name: selectedCustomer.store_name,
-                            customer_type: selectedCustomer.customer_type,
-                            sector_name: sectors?.find(s => s.id === selectedCustomer.sector_id)?.name,
-                          }}
-                        />
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          <p className="text-xs text-muted-foreground">
-                            {selectedCustomer.wilaya}
-                            {selectedCustomer.phone && ` • ${selectedCustomer.phone}`}
-                          </p>
+                    <CustomerSummary
+                      customer={{
+                        name: selectedCustomer.name,
+                        store_name: selectedCustomer.store_name,
+                        customer_type: selectedCustomer.customer_type,
+                        sector_name: sectors?.find(s => s.id === selectedCustomer.sector_id)?.name,
+                        phone: selectedCustomer.phone,
+                        wilaya: selectedCustomer.wilaya,
+                      }}
+                      avatarSize="md"
+                      footer={(
+                        <div className="flex items-center gap-1.5 mt-1">
                           <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                             {selectedCustomer.default_payment_type === 'with_invoice' ? t('orders.with_invoice') :
                               selectedCustomer.default_price_subtype === 'super_gros' ? t('products.price_super_gros') :
@@ -804,8 +922,8 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
                             }
                           </Badge>
                         </div>
-                      </div>
-                    </div>
+                      )}
+                    />
                     <CustomerDistanceIndicator
                       customerLatitude={selectedCustomer.latitude}
                       customerLongitude={selectedCustomer.longitude}
@@ -1032,6 +1150,15 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
                           )}
                         </div>
                         <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7"
+                            onClick={() => handleEditItem(item)}
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </Button>
                           <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold">
                             {item.quantity}
                           </span>
@@ -1115,17 +1242,45 @@ const DirectSaleDialog: React.FC<DirectSaleDialogProps> = ({ open, onOpenChange,
               ) : null}
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+    </>
+  );
+
+  return (
+    <>
+      {embedded ? (
+        <div className="flex flex-col flex-1 min-h-0" dir={dir}>
+          {content}
+        </div>
+      ) : (
+        <Dialog open={open} onOpenChange={handleClose}>
+          <DialogContent className="max-w-lg max-h-[90vh] p-0 gap-0 overflow-hidden" dir={dir}>
+            {content}
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* Quantity Dialog */}
       <ProductQuantityDialog
         open={showQuantityDialog}
-        onOpenChange={setShowQuantityDialog}
+        onOpenChange={(openState) => {
+          setShowQuantityDialog(openState);
+          if (!openState) {
+            setEditingProductMode(false);
+            setEditingTargetProductId(null);
+            setEditingInitialGiftOfferId(undefined);
+          }
+        }}
         product={selectedProduct}
-        onConfirm={handleAddProductWithQuantity}
+        onConfirm={editingProductMode ? handleEditProductWithQuantity : handleAddProductWithQuantity}
         unitPrice={selectedProduct ? getProductPrice(selectedProduct) : 0}
         unitPiecePrice={selectedProduct ? (getProductPrice(selectedProduct) / (selectedProduct.pieces_per_box || 1)) : 0}
+        mode={editingProductMode ? 'edit' : 'add'}
+        initialQuantity={editingProductMode ? editingInitialQuantity : 1}
+        initialGiftPieces={editingProductMode ? editingInitialGiftPieces : 0}
+        initialGiftOfferId={editingProductMode ? editingInitialGiftOfferId : undefined}
+        initialOfferApplied={editingProductMode ? editingInitialOfferApplied : false}
+        initialIsUnitSale={editingProductMode ? editingInitialIsUnitSale : false}
+        initialCustomUnitPrice={editingProductMode ? editingInitialCustomUnitPrice : undefined}
       />
 
       {/* Payment Dialog */}

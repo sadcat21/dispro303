@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import CustomerPickerDialog from './CustomerPickerDialog';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import {
-    ShoppingCart, Banknote, Truck, Ban, Loader2
+    ShoppingCart, Banknote, Truck, Ban
 } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -128,10 +129,31 @@ const CustomerActionDialog: React.FC<CustomerActionDialogProps> = ({
             <DialogContent className="max-w-md" dir={dir}>
                 <div className="space-y-4 py-2">
                     {/* Selected customer info */}
-                    <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
-                        <div className="w-10 h-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold">
-                            {(selectedCustomer?.store_name || selectedCustomer?.name)?.charAt(0) || '?'}
-                        </div>
+                    <div className="p-3 bg-muted/50 rounded-lg">
+                        <CustomerSummary
+                            customer={{
+                                name: selectedCustomer?.name,
+                                store_name: selectedCustomer?.store_name,
+                                customer_type: selectedCustomer?.customer_type,
+                                sector_name: selectedCustomer?.sector_id
+                                    ? sectors.find((s) => s.id === selectedCustomer?.sector_id)?.name
+                                    : undefined,
+                                phone: selectedCustomer?.phone,
+                                wilaya: selectedCustomer?.wilaya,
+                            }}
+                            avatarSize="md"
+                            rightSlot={(
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="text-xs"
+                                    onClick={() => setSelectedCustomer(null)}
+                                >
+                                    تغيير
+                                </Button>
+                            )}
+                        />
+                        {/*
                         <div className="flex-1 min-w-0">
                             <p className="font-bold text-sm">{selectedCustomer?.store_name || selectedCustomer?.name}</p>
                             <p className="text-xs text-muted-foreground">
@@ -146,6 +168,7 @@ const CustomerActionDialog: React.FC<CustomerActionDialogProps> = ({
                         >
                             تغيير
                         </Button>
+                        */}
                     </div>
 
                     {/* Action buttons */}

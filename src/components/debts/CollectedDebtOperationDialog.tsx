@@ -8,7 +8,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Card } from '@/components/ui/card';
 import ReceiptDialog from '@/components/printing/ReceiptDialog';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { useAuth } from '@/contexts/AuthContext';
 import { useWorkerPrintInfo } from '@/hooks/useWorkerPrintInfo';
 import { useCompanyInfo } from '@/hooks/useCompanyInfo';
@@ -308,13 +308,16 @@ const CollectedDebtOperationDialog: React.FC<Props> = ({ open, onOpenChange, col
           <div className="space-y-3">
             <Card className="p-3 space-y-2">
               <div className="flex items-start justify-between gap-3">
-                <CustomerLabel
+                <CustomerSummary
                   customer={{
                     name: customer?.name,
                     store_name: customer?.store_name,
                     customer_type: customer?.customer_type,
+                    phone: customer?.phone,
                   }}
                   compact
+                  showAvatar={false}
+                  showMeta={false}
                 />
                 <div className="rounded-full bg-green-50 px-3 py-1 text-xs font-bold text-green-700">
                   {Number(collection.amount_collected || 0).toLocaleString()} DA

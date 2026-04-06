@@ -8,11 +8,11 @@ import { useWorkerPermissions } from '@/hooks/usePermissions';
 import { useIsElementHidden } from '@/hooks/useUIOverrides';
 import ProductGrid from '@/components/promo/ProductGrid';
 import AddPromoDialog from '@/components/promo/AddPromoDialog';
-import DirectSaleDialog from '@/components/warehouse/DirectSaleDialog';
+import SalesHubDialog from '@/components/sales/SalesHubDialog';
 import FactoryReceiptQuickDialog from '@/components/stock/FactoryReceiptQuickDialog';
 import FactoryDeliveryQuickDialog from '@/components/stock/FactoryDeliveryQuickDialog';
 import CustomerActionDialog from '@/components/orders/CustomerActionDialog';
-import CreateOrderDialog from '@/components/orders/CreateOrderDialog';
+import OrderFlowDialog from '@/components/orders/OrderFlowDialog';
 import CustomerPickerDialog from '@/components/orders/CustomerPickerDialog';
 import { useTrackVisit } from '@/hooks/useVisitTracking';
 import { Customer } from '@/types/database';
@@ -40,7 +40,8 @@ const WorkerHome: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [showPromoDialog, setShowPromoDialog] = useState(false);
-  const [showDirectSaleDialog, setShowDirectSaleDialog] = useState(false);
+  const [showSalesHubDialog, setShowSalesHubDialog] = useState(false);
+  const [salesHubTab, setSalesHubTab] = useState<'direct' | 'delivery'>('direct');
   const [showCreateOrderDialog, setShowCreateOrderDialog] = useState(false);
   const [showCustomerPickerForOrder, setShowCustomerPickerForOrder] = useState(false);
   const [showActionDialog, setShowActionDialog] = useState(false);
@@ -380,7 +381,15 @@ const WorkerHome: React.FC = () => {
             quickActions.push({ key: 'deliveries', icon: <Truck className="w-6 h-6" />, label: t('deliveries.title'), onClick: () => navigate('/my-deliveries') });
           }
           if ((hasDeliveryAccess || isWarehouseManager) && !isDirectSaleHidden) {
-            quickActions.push({ key: 'direct-sale', icon: <ShoppingBag className="w-6 h-6" />, label: isWarehouseManager ? 'بيع مخزن - Vente Dépôt' : t('stock.direct_sale'), onClick: () => setShowActionDialog(true) });
+            quickActions.push({
+              key: 'direct-sale',
+              icon: <ShoppingBag className="w-6 h-6" />,
+              label: isWarehouseManager ? 'بيع مخزن - Vente Dépôt' : t('stock.direct_sale'),
+              onClick: () => {
+                setSalesHubTab('direct');
+                setShowActionDialog(true);
+              },
+            });
           }
           // Stock management hub for warehouse manager
           if (isWarehouseManager) {
@@ -474,10 +483,14 @@ const WorkerHome: React.FC = () => {
         </div>
       )}
 
-      <DirectSaleDialog
-        open={showDirectSaleDialog}
-        onOpenChange={setShowDirectSaleDialog}
+      <SalesHubDialog
+        open={showSalesHubDialog}
+        onOpenChange={(open) => {
+          setShowSalesHubDialog(open);
+          if (!open) setSelectedCustomerForAction(null);
+        }}
         initialCustomerId={selectedCustomerForAction?.id}
+        initialTab={salesHubTab}
         stockSource={isWarehouseManager ? 'warehouse' : 'worker'}
         stockItems={(isWarehouseManager ? (warehouseStockItems || []) : (stockItems || [])).map(s => ({
           id: s.id,
@@ -487,9 +500,10 @@ const WorkerHome: React.FC = () => {
         }))}
       />
 
-      <CreateOrderDialog
+      <OrderFlowDialog
         open={showCreateOrderDialog}
         onOpenChange={setShowCreateOrderDialog}
+        mode="create"
         initialCustomerId={selectedCustomerForAction?.id}
       />
 
@@ -498,7 +512,8 @@ const WorkerHome: React.FC = () => {
         onOpenChange={setShowActionDialog}
         onSale={(customer) => {
           setSelectedCustomerForAction(customer);
-          setShowDirectSaleDialog(true);
+          setSalesHubTab('direct');
+          setShowSalesHubDialog(true);
         }}
         directAction="sale"
         allowedActions={['sale']}

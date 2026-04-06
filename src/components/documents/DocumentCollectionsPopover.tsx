@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
+import CustomerSummary from '@/components/customers/CustomerSummary';
 import { FileCheck, Check, X, Clock, Eye, FileWarning } from 'lucide-react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSectors } from '@/hooks/useSectors';
@@ -20,8 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { format, addDays } from 'date-fns';
 import { toast } from 'sonner';
-import CheckVerificationDialog from '@/components/orders/CheckVerificationDialog';
-import DocVisitNoCollectionDialog from './DocVisitNoCollectionDialog';
+import DocumentFlowDialog from './DocumentFlowDialog';
 import { supabase } from '@/integrations/supabase/client';
 import { isAdminRole } from '@/lib/utils';
 
@@ -151,8 +150,6 @@ const DocumentCollectionsPopover: React.FC = () => {
       ? format(new Date(targetDate + 'T00:00:00'), 'dd/MM/yyyy')
       : 'اليوم';
 
-  if (totalCount === 0 && pendingOrders.length === 0) return null;
-
   return (
     <>
       <Popover onOpenChange={(open) => { if (open) setSelectedDayNum(null); }}>
@@ -208,11 +205,13 @@ const DocumentCollectionsPopover: React.FC = () => {
         </PopoverContent>
       </Popover>
 
-      {/* CheckVerificationDialog — opens directly when clicking collect */}
+      {/* Document collection dialogs */}
       {selectedOrder && dialogMode === 'collect' && (
-        <CheckVerificationDialog
+        <DocumentFlowDialog
           open={true}
           onOpenChange={(open) => { if (!open) { setDialogMode(null); setSelectedOrder(null); } }}
+          mode="collect"
+          orderId={selectedOrder.id}
           orderTotal={Number(selectedOrder.total_amount)}
           customerName={selectedOrder.customer?.store_name || selectedOrder.customer?.name || '—'}
           documentType={selectedOrder.invoice_payment_method as 'check' | 'receipt' | 'transfer'}
@@ -241,12 +240,13 @@ const DocumentCollectionsPopover: React.FC = () => {
       )}
 
       {selectedOrder && dialogMode === 'visit' && (
-        <DocVisitNoCollectionDialog
+        <DocumentFlowDialog
           open={true}
           onOpenChange={(open) => { if (!open) { setDialogMode(null); setSelectedOrder(null); } }}
+          mode="visit"
           orderId={selectedOrder.id}
           customerName={selectedOrder.customer?.name || '—'}
-          documentType={selectedOrder.invoice_payment_method}
+          documentType={selectedOrder.invoice_payment_method as 'check' | 'receipt' | 'transfer'}
           customerLatitude={selectedOrder.customer?.latitude}
           customerLongitude={selectedOrder.customer?.longitude}
         />
@@ -266,7 +266,20 @@ const PendingDocList: React.FC<{ orders: PendingDocOrder[]; onCollect: (o: Pendi
         {orders.map(order => (
           <div key={order.id} className="p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <CustomerLabel customer={{ name: order.customer?.name, store_name: order.customer?.store_name, customer_type: order.customer?.customer_type, sector_name: order.customer?.sector_id && sectorMap ? sectorMap.get(order.customer.sector_id) : undefined }} compact hideBadges />
+              <CustomerSummary
+                customer={{
+                  name: order.customer?.name,
+                  store_name: order.customer?.store_name,
+                  customer_type: order.customer?.customer_type,
+                  sector_name: order.customer?.sector_id && sectorMap ? sectorMap.get(order.customer.sector_id) : undefined,
+                  phone: order.customer?.phone,
+                  wilaya: order.customer?.wilaya,
+                }}
+                compact
+                hideBadges
+                showAvatar={false}
+                showMeta={false}
+              />
               <Badge className={`text-[10px] ${getDocColor(order.invoice_payment_method)}`}>
                 {getDocLabel(order.invoice_payment_method)}
               </Badge>
@@ -319,7 +332,20 @@ const PendingDocCollectionsList: React.FC<{
         {collections.map(c => (
           <div key={c.id} className="p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <CustomerLabel customer={{ name: c.order?.customer?.name, store_name: c.order?.customer?.store_name, customer_type: c.order?.customer?.customer_type, sector_name: c.order?.customer?.sector_id && sectorMap ? sectorMap.get(c.order.customer.sector_id) : undefined }} compact hideBadges />
+              <CustomerSummary
+                customer={{
+                  name: c.order?.customer?.name,
+                  store_name: c.order?.customer?.store_name,
+                  customer_type: c.order?.customer?.customer_type,
+                  sector_name: c.order?.customer?.sector_id && sectorMap ? sectorMap.get(c.order.customer.sector_id) : undefined,
+                  phone: c.order?.customer?.phone,
+                  wilaya: c.order?.customer?.wilaya,
+                }}
+                compact
+                hideBadges
+                showAvatar={false}
+                showMeta={false}
+              />
               <Badge variant="outline" className="text-xs">{actionLabels[c.action] || c.action}</Badge>
             </div>
             <div className="text-xs text-muted-foreground">

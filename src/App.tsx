@@ -28,6 +28,7 @@ import Permissions from "./pages/admin/Permissions";
 import ActivityLogs from "./pages/admin/ActivityLogs";
 import NearbyStores from "./pages/admin/NearbyStores";
 import CustomerAccounts from "./pages/admin/CustomerAccounts";
+import CustomerJourney from "./pages/admin/CustomerJourney";
 import ProductOffers from "./pages/admin/ProductOffers";
 import AvailableOffers from "./pages/AvailableOffers";
 import Expenses from "./pages/Expenses";
@@ -207,6 +208,12 @@ const AppRoutes = () => {
       <Route path="/customer-accounts" element={
         <ProtectedRoute allowedRoles={['admin', 'branch_admin']}>
           <CustomerAccounts />
+        </ProtectedRoute>
+      } />
+
+      <Route path="/customer-journey" element={
+        <ProtectedRoute allowedRoles={['admin', 'branch_admin', 'project_manager']}>
+          <CustomerJourney />
         </ProtectedRoute>
       } />
 

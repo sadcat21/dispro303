@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import CustomerLabel from '@/components/customers/CustomerLabel';
-import { Landmark, Check, X, Clock, Banknote, Eye } from 'lucide-react';
+import CustomerSummary from '@/components/customers/CustomerSummary';
+import { Landmark, Check, X, Clock } from 'lucide-react';
 import { useLanguage } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useDueDebts, usePendingCollections, useApproveCollection, DueDebt } from '@/hooks/useDebtCollections';
@@ -13,12 +13,10 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import DebtFlowDialog from '@/components/debts/DebtFlowDialog';
 import { Input } from '@/components/ui/input';
 import { format, addDays } from 'date-fns';
 import { toast } from 'sonner';
-import CollectDebtDialog from './CollectDebtDialog';
-import VisitNoPaymentDialog from './VisitNoPaymentDialog';
 import { isAdminRole } from '@/lib/utils';
 
 // Algerian work week: 0=Saturday, 1=Sunday, 2=Monday, 3=Tuesday, 4=Wednesday, 5=Thursday
@@ -69,8 +67,6 @@ const DebtCollectionsPopover: React.FC = () => {
   const approveCollection = useApproveCollection();
 
   const [selectedDebt, setSelectedDebt] = useState<DueDebt | null>(null);
-  const [showCollect, setShowCollect] = useState(false);
-  const [showVisit, setShowVisit] = useState(false);
 
   const isAdmin = isAdminRole(role);
   // Badge always shows TODAY's count, not the selected day
@@ -136,8 +132,6 @@ const DebtCollectionsPopover: React.FC = () => {
     : targetDate
       ? format(new Date(targetDate + 'T00:00:00'), 'dd/MM/yyyy')
       : 'اليوم والمتأخرة';
-
-  const remaining = selectedDebt ? Number(selectedDebt.remaining_amount) : 0;
 
   return (
     <>
@@ -222,86 +216,12 @@ const DebtCollectionsPopover: React.FC = () => {
         </PopoverContent>
       </Popover>
 
-      {/* Debt Info Dialog — same pattern as debt management */}
       {selectedDebt && (
-        <Dialog open={!!selectedDebt} onOpenChange={(open) => !open && setSelectedDebt(null)}>
-          <DialogContent className="max-w-[95vw] sm:max-w-sm p-4 gap-3" dir="rtl">
-            <DialogHeader className="pb-0">
-              <DialogTitle className="text-base truncate">
-                <CustomerLabel customer={{ name: selectedDebt.customer?.name, store_name: selectedDebt.customer?.store_name, customer_type: selectedDebt.customer?.customer_type, sector_name: selectedDebt.customer?.sector_id ? sectorMap.get(selectedDebt.customer.sector_id) : undefined }} compact />
-              </DialogTitle>
-            </DialogHeader>
-
-            <div className="space-y-3">
-              {/* Debt summary */}
-              <div className="bg-muted/50 rounded-md p-2 text-center space-y-1">
-                <p className="text-xs text-muted-foreground">المبلغ المتبقي</p>
-                <p className="text-xl font-bold text-destructive">{remaining.toLocaleString()} DA</p>
-                <p className="text-xs text-muted-foreground">
-                  تاريخ الاستحقاق: {selectedDebt.due_date ? format(new Date(selectedDebt.due_date + 'T00:00:00'), 'dd/MM/yyyy') : '—'}
-                </p>
-              </div>
-
-              {/* Action buttons — same as debt management */}
-              <div className="flex gap-2">
-                <Button
-                  size="sm"
-                  className="flex-1"
-                  onClick={() => setShowCollect(true)}
-                >
-                  <Banknote className="w-4 h-4 ml-1" />
-                  تحصيل
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="flex-1"
-                  onClick={() => setShowVisit(true)}
-                >
-                  <Eye className="w-4 h-4 ml-1" />
-                  زيارة بدون دفع
-                </Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
-
-      {/* Collect dialog — same as debt management */}
-      {selectedDebt && (
-        <CollectDebtDialog
-          open={showCollect}
-          onOpenChange={(open) => {
-            setShowCollect(open);
-            if (!open) setSelectedDebt(null);
-          }}
-          debtId={selectedDebt.id}
-          totalDebtAmount={Number(selectedDebt.total_amount)}
-          paidAmountBefore={Number(selectedDebt.paid_amount)}
-          remainingAmount={remaining}
-          customerName={selectedDebt.customer?.name || '—'}
-          customerId={selectedDebt.customer_id}
-          customerPhone={selectedDebt.customer?.phone || null}
-          defaultAmount={selectedDebt.collection_amount || undefined}
-          collectionType={selectedDebt.collection_type}
-          collectionDays={selectedDebt.collection_days}
-        />
-      )}
-
-      {/* Visit dialog — same as debt management */}
-      {selectedDebt && (
-        <VisitNoPaymentDialog
-          open={showVisit}
-          onOpenChange={(open) => {
-            setShowVisit(open);
-            if (!open) setSelectedDebt(null);
-          }}
-          debtId={selectedDebt.id}
-          customerName={selectedDebt.customer?.name || '—'}
-          collectionType={selectedDebt.collection_type}
-          collectionDays={selectedDebt.collection_days}
-          customerLatitude={selectedDebt.customer?.latitude}
-          customerLongitude={selectedDebt.customer?.longitude}
+        <DebtFlowDialog
+          open={!!selectedDebt}
+          onOpenChange={(open) => !open && setSelectedDebt(null)}
+          mode="details"
+          debt={selectedDebt}
         />
       )}
     </>
@@ -334,7 +254,19 @@ const DueDebtsList: React.FC<{ debts: DueDebt[]; onSelect: (d: DueDebt) => void;
           >
             <div className="flex flex-col gap-2">
               <div className="min-w-0">
-                <CustomerLabel customer={{ name: debt.customer?.name, store_name: debt.customer?.store_name, customer_type: debt.customer?.customer_type, sector_name: debt.customer?.sector_id && sectorMap ? sectorMap.get(debt.customer.sector_id) : undefined }} compact />
+                <CustomerSummary
+                  customer={{
+                    name: debt.customer?.name,
+                    store_name: debt.customer?.store_name,
+                    customer_type: debt.customer?.customer_type,
+                    sector_name: debt.customer?.sector_id && sectorMap ? sectorMap.get(debt.customer.sector_id) : undefined,
+                    phone: debt.customer?.phone,
+                    wilaya: debt.customer?.wilaya,
+                  }}
+                  compact
+                  showAvatar={false}
+                  showMeta={false}
+                />
               </div>
               <div className="rounded-2xl border border-red-100 bg-red-50/80 px-3 py-2 text-right">
                 <div className="text-[11px] font-medium text-red-500">المتبقي</div>
@@ -389,7 +321,20 @@ const PendingCollectionsList: React.FC<{
         {filteredCollections.map(c => (
           <div key={c.id} className="p-3 space-y-2">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-              <CustomerLabel customer={{ name: c.debt?.customer?.name, store_name: c.debt?.customer?.store_name, customer_type: c.debt?.customer?.customer_type, sector_name: c.debt?.customer?.sector_id && sectorMap ? sectorMap.get(c.debt.customer.sector_id) : undefined }} compact hideBadges />
+              <CustomerSummary
+                customer={{
+                  name: c.debt?.customer?.name,
+                  store_name: c.debt?.customer?.store_name,
+                  customer_type: c.debt?.customer?.customer_type,
+                  sector_name: c.debt?.customer?.sector_id && sectorMap ? sectorMap.get(c.debt.customer.sector_id) : undefined,
+                  phone: c.debt?.customer?.phone,
+                  wilaya: c.debt?.customer?.wilaya,
+                }}
+                compact
+                hideBadges
+                showAvatar={false}
+                showMeta={false}
+              />
               <Badge variant="outline" className="text-xs">{actionLabels[c.action] || c.action}</Badge>
             </div>
             <div className="text-xs text-muted-foreground">
