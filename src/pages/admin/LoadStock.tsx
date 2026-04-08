@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import AdaptiveScrollContainer from '@/components/ui/adaptive-scroll-container';
 import { Plus, Loader2, Trash2, Truck, AlertTriangle, Package, CheckCircle, PackageX, User, ChevronDown, Gift, Save, History, X, CalendarIcon, Search, RefreshCw, UserCheck, ShoppingCart, Printer } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
@@ -1158,7 +1159,10 @@ const LoadStock: React.FC = () => {
 
             <TabsContent value="stock" className="mt-1">
               {!suggestionsLoading && suggestions.length > 0 ? (
-                <div className="grid gap-1 max-h-[30dvh] overflow-y-auto">
+                <AdaptiveScrollContainer
+                  maxHeightClassName="max-h-[30dvh]"
+                  contentClassName="grid gap-1"
+                >
                   {suggestions.map(s => {
                     const sessionLoad = sessionItems.filter(si => si.product_id === s.product_id);
                     const loadedBoxes = sessionLoad.reduce((sum: number, si: any) => sum + (si.quantity || 0), 0);
@@ -1225,7 +1229,7 @@ const LoadStock: React.FC = () => {
                       </div>
                     );
                   })}
-                </div>
+                </AdaptiveScrollContainer>
               ) : suggestionsLoading ? (
                 <div className="flex items-center justify-center py-2">
                   <Loader2 className="w-4 h-4 animate-spin text-primary" />
@@ -1250,7 +1254,11 @@ const LoadStock: React.FC = () => {
       </div>
 
       {/* Scrollable Session Items - horizontal compact list */}
-      <div className="flex-1 overflow-y-auto px-2 touch-pan-y" style={{ WebkitOverflowScrolling: 'touch' }}>
+      <AdaptiveScrollContainer
+        className="flex-1"
+        maxHeightClassName="flex-1"
+        contentClassName="px-2"
+      >
         {activeSessionId && sessionItems.length > 0 ? (
           <div className="space-y-1 pb-2 pt-1">
             {sessionItems.map((item: any) => {
@@ -1312,7 +1320,7 @@ const LoadStock: React.FC = () => {
             <p className="text-[12px] font-medium">ابدأ جلسة شحن جديدة</p>
           </div>
         ) : null}
-      </div>
+      </AdaptiveScrollContainer>
 
       {/* Fixed Bottom Buttons */}
       {selectedWorker && (
@@ -1642,7 +1650,7 @@ const LoadStock: React.FC = () => {
 
       {/* Session History Dialog */}
       <Dialog open={showSessionHistory} onOpenChange={setShowSessionHistory}>
-        <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90dvh] overflow-hidden flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <History className="w-5 h-5 text-primary" />
@@ -1810,6 +1818,11 @@ const LoadStock: React.FC = () => {
               })()}
             </DialogTitle>
           </DialogHeader>
+          <AdaptiveScrollContainer
+            className="flex-1"
+            maxHeightClassName="flex-1 max-h-[calc(90dvh-5rem)]"
+            contentClassName="space-y-3 pb-1"
+          >
           {(() => {
             const session = sessions.find(s => s.id === viewSessionId);
             const isUnload = session?.status === 'unloaded';
@@ -1870,8 +1883,10 @@ const LoadStock: React.FC = () => {
                         <p className="text-xs text-muted-foreground">لا توجد فوارق في هذه الجلسة</p>
                       </div>
                     ) : (
-                      <ScrollArea className="max-h-[40dvh]">
-                        <div className="space-y-2">
+                    <AdaptiveScrollContainer
+                      maxHeightClassName="max-h-[40dvh]"
+                      contentClassName="space-y-2"
+                    >
                           {/* Show discrepancies first */}
                           {viewReviewDiscrepancies.length > 0 && (
                             <div className="space-y-2">
@@ -1927,14 +1942,15 @@ const LoadStock: React.FC = () => {
                               </div>
                             );
                           })()}
-                        </div>
-                      </ScrollArea>
+                    </AdaptiveScrollContainer>
                     )
                   ) : viewSessionItems.length === 0 ? (
                     <p className="text-center text-muted-foreground text-xs py-4">لا توجد منتجات في هذه الجلسة</p>
                   ) : (
-                    <ScrollArea className="max-h-[40dvh]">
-                      <div className="space-y-2">
+                    <AdaptiveScrollContainer
+                      maxHeightClassName="max-h-[40dvh]"
+                      contentClassName="space-y-2"
+                    >
                         {viewSessionItems.map(item => {
                           const ppb = (item.product as any)?.pieces_per_box || 20;
                           const giftInCustom = item.gift_unit === 'box' 
@@ -2023,13 +2039,13 @@ const LoadStock: React.FC = () => {
                             </div>
                           );
                         })}
-                      </div>
-                    </ScrollArea>
+                    </AdaptiveScrollContainer>
                   )}
                 </div>
               </div>
             ) : null;
           })()}
+          </AdaptiveScrollContainer>
         </DialogContent>
       </Dialog>
 
@@ -2042,7 +2058,10 @@ const LoadStock: React.FC = () => {
             </DialogTitle>
             <DialogDescription>{t('stock.empty_truck_confirm')}</DialogDescription>
           </DialogHeader>
-          <div className="max-h-[50dvh] overflow-y-auto space-y-3">
+          <AdaptiveScrollContainer
+            maxHeightClassName="max-h-[50dvh]"
+            contentClassName="space-y-3"
+          >
             {emptyTruckItems.map((item, idx) => {
               const ppb = item.piecesPerBox;
               return (
@@ -2106,7 +2125,7 @@ const LoadStock: React.FC = () => {
                 </Card>
               );
             })}
-          </div>
+          </AdaptiveScrollContainer>
           <div className="flex flex-col gap-1.5 text-sm bg-muted/50 rounded-md p-2">
             <div className="flex items-center justify-between">
               <span className="font-medium">إجمالي الإرجاع</span>

@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useRealtimeSubscription } from '@/hooks/useRealtimeSubscription';
+import OrderDetailsDialog from '@/components/orders/OrderDetailsDialog';
+import type { OrderWithDetails } from '@/types/database';
 
 interface WorkerAchievementsDialogProps {
   open: boolean;
@@ -182,6 +184,7 @@ const WorkerAchievementsDialog: React.FC<WorkerAchievementsDialogProps> = ({
   const [dateTo, setDateTo] = useState(today);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
   const [selectedVisit, setSelectedVisit] = useState<any | null>(null);
+  const [selectedOrderDetails, setSelectedOrderDetails] = useState<OrderWithDetails | null>(null);
 
   // Reset dates when dialog opens
   React.useEffect(() => {
@@ -252,6 +255,33 @@ const WorkerAchievementsDialog: React.FC<WorkerAchievementsDialogProps> = ({
   }, [visits, activeFilter]);
 
   const isToday = dateFrom === today && dateTo === today;
+
+
+  const handleOpenAchievement = async (visit: any) => {
+    const orderLikeTypes = ['order', 'direct_sale', 'delivery'];
+    const entityId = visit.entity_id || visit.order_id || visit.reference_id;
+    if (!orderLikeTypes.includes(visit.operation_type) || !entityId) {
+      setSelectedVisit(visit);
+      return;
+    }
+
+    const { data } = await supabase
+      .from('orders')
+      .select(`
+        *,
+        customer:customers(*),
+        worker:workers(*)
+      `)
+      .eq('id', entityId)
+      .single();
+
+    if (data) {
+      setSelectedOrderDetails(data as OrderWithDetails);
+      return;
+    }
+
+    setSelectedVisit(visit);
+  };
 
   return (
     <>
@@ -332,7 +362,7 @@ const WorkerAchievementsDialog: React.FC<WorkerAchievementsDialogProps> = ({
                     <button
                       key={v.id}
                       type="button"
-                      onClick={() => setSelectedVisit(v)}
+                      onClick={() => handleOpenAchievement(v)}
                       className={`w-full text-start flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer hover:shadow-md transition-shadow ${OPERATION_COLORS[v.operation_type] || 'border-border'}`}
                     >
                       <div className="mt-0.5">
@@ -372,6 +402,13 @@ const WorkerAchievementsDialog: React.FC<WorkerAchievementsDialogProps> = ({
           )}
         </DialogContent>
       </Dialog>
+      <OrderDetailsDialog
+        open={!!selectedOrderDetails}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setSelectedOrderDetails(null);
+        }}
+        order={selectedOrderDetails}
+      />
     </>
   );
 };

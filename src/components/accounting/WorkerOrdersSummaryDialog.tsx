@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useRef, useEffect, useCallback } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import AdaptiveScrollContainer from '@/components/ui/adaptive-scroll-container';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -129,7 +130,11 @@ const OrdersCarousel: React.FC<{
           {item.customers.length > 0 && (
             <>
               <div className="absolute inset-0 bg-background/40 backdrop-blur-[2px]" />
-              <div className="absolute inset-0 z-10 p-3 overflow-y-auto space-y-1.5">
+              <AdaptiveScrollContainer
+                className="absolute inset-0 z-10"
+                maxHeightClassName="absolute inset-0"
+                contentClassName="p-3 space-y-1.5"
+              >
                 {item.customers.map((c) => (
                   <div
                     key={c.customerId}
@@ -156,7 +161,7 @@ const OrdersCarousel: React.FC<{
                     </div>
                   </div>
                 ))}
-              </div>
+              </AdaptiveScrollContainer>
             </>
           )}
         </div>
@@ -659,14 +664,17 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
 
     {/* Print Settings Dialog */}
     <Dialog open={showPrintSettings} onOpenChange={setShowPrintSettings}>
-      <DialogContent className="max-w-[95vw] sm:max-w-sm p-4 max-h-[85dvh] overflow-y-auto" dir="rtl">
+      <DialogContent className="max-w-[95vw] sm:max-w-sm p-4 max-h-[85dvh] overflow-hidden" dir="rtl">
         <DialogHeader className="pb-2">
           <DialogTitle className="flex items-center gap-2 text-base">
             <Printer className="w-4 h-4" />
             إعدادات الطباعة
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <AdaptiveScrollContainer
+          maxHeightClassName="max-h-[calc(85dvh-4rem)]"
+          contentClassName="space-y-3 pe-1"
+        >
           {/* Summary */}
           <div className="bg-primary/10 p-3 rounded-lg text-center">
             <p className="text-base font-bold">{selectedCustomerIds.size} عميل • {totalQuantity} صندوق</p>
@@ -751,7 +759,7 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
               إلغاء
             </Button>
           </div>
-        </div>
+        </AdaptiveScrollContainer>
       </DialogContent>
     </Dialog>
 
@@ -788,8 +796,11 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
             </Button>
           </div>
         </div>
-        <div className="flex-1 min-h-0 overflow-y-auto pe-1" style={{ maxHeight: 'calc(80dvh - 160px)', WebkitOverflowScrolling: 'touch' }}>
-          <div className="space-y-1 pe-2">
+        <AdaptiveScrollContainer
+          className="flex-1"
+          maxHeightClassName="flex-1"
+          contentClassName="space-y-1 pe-2"
+        >
             {uniqueCustomers.map((customer) => (
               <div
                 key={customer.id}
@@ -822,8 +833,7 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
                 </div>
               </div>
             ))}
-          </div>
-        </div>
+        </AdaptiveScrollContainer>
         <div className="pt-2 shrink-0">
           <Button className="w-full gap-1.5" size="sm" onClick={async () => { await saveCustomerSelection(); setShowCustomerPicker(false); }} disabled={customersSaving}>
             <Save className="w-3.5 h-3.5" />
@@ -843,8 +853,11 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
           </DialogTitle>
         </DialogHeader>
         <p className="text-xs text-muted-foreground shrink-0">أضف كميات احتياطية لكل منتج. ستظهر كصف خاص في الطباعة.</p>
-        <div className="flex-1 min-h-0 mt-2 overflow-y-auto pe-1" style={{ WebkitOverflowScrolling: 'touch' }}>
-          <div className="space-y-1.5 pe-2">
+        <AdaptiveScrollContainer
+          className="flex-1 mt-2"
+          maxHeightClassName="flex-1"
+          contentClassName="space-y-1.5 pe-2"
+        >
             {aggregatedProducts.map((product) => {
               const reserveQty = cashVanProducts[product.productId] || 0;
               const totalWithReserve = product.totalQuantity + reserveQty;
@@ -927,8 +940,7 @@ const WorkerOrdersSummaryDialog: React.FC<Props> = ({ open, onOpenChange, worker
                 </div>
               );
             })}
-          </div>
-        </div>
+        </AdaptiveScrollContainer>
         <div className="grid grid-cols-2 gap-2 pt-2 shrink-0">
           <Button size="sm" onClick={async () => { await saveCashVan(); setShowCashVanDialog(false); }} disabled={cashVanSaving} className="gap-1.5">
             <Save className="w-3.5 h-3.5" />

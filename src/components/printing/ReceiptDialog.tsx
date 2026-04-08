@@ -71,6 +71,18 @@ interface ReceiptDialogProps {
     customerSurplusAmount?: number;
     receiptTitleOverride?: string;
     hidePaymentDetails?: boolean;
+    showDebtTotalSummary?: boolean;
+    showDebtPaidSummary?: boolean;
+    debtMovementEntries?: Array<{
+      kind: 'debt' | 'partial' | 'full' | 'visit';
+      date: string;
+      workerName?: string | null;
+      paymentMethod?: string | null;
+      beforeAmount?: number | null;
+      afterAmount?: number | null;
+      amount: number;
+      note?: string | null;
+    }>;
   };
 }
 const ReceiptDialog: React.FC<ReceiptDialogProps> = ({ open, onOpenChange, receiptData }) => {
@@ -104,6 +116,8 @@ const ReceiptDialog: React.FC<ReceiptDialogProps> = ({ open, onOpenChange, recei
   const [truckId, setTruckId] = useState('');
   const [showSessionId, setShowSessionId] = useState(false);
   const [sessionId, setSessionId] = useState('');
+  const [showDebtTotalSummary, setShowDebtTotalSummary] = useState(receiptData.showDebtTotalSummary ?? true);
+  const [showDebtPaidSummary, setShowDebtPaidSummary] = useState(receiptData.showDebtPaidSummary ?? true);
 
   // Load settings from DB
   useEffect(() => {
@@ -129,6 +143,12 @@ const ReceiptDialog: React.FC<ReceiptDialogProps> = ({ open, onOpenChange, recei
       setSettingsLoaded(true);
     })();
   }, [open, settingsLoaded]);
+
+  useEffect(() => {
+    if (!open) return;
+    setShowDebtTotalSummary(receiptData.showDebtTotalSummary ?? true);
+    setShowDebtPaidSummary(receiptData.showDebtPaidSummary ?? true);
+  }, [open, receiptData.showDebtPaidSummary, receiptData.showDebtTotalSummary]);
 
   // Save settings to DB when they change
   const saveSettings = async (partial: Partial<PrintSettings>) => {
@@ -211,6 +231,9 @@ const ReceiptDialog: React.FC<ReceiptDialogProps> = ({ open, onOpenChange, recei
     replaceNameWithLogo,
     receiptTitleOverride: receiptData.receiptTitleOverride,
     hidePaymentDetails: receiptData.hidePaymentDetails,
+    showDebtTotalSummary,
+    showDebtPaidSummary,
+    debtMovementEntries: receiptData.debtMovementEntries,
   };
 
   const previewHtml = formatReceiptForPreview(receiptDataForFormatter);
@@ -390,6 +413,20 @@ const ReceiptDialog: React.FC<ReceiptDialogProps> = ({ open, onOpenChange, recei
                 <Label className="text-xs">مخزون العامل (قبل/بعد)</Label>
                 <Switch checked={showStockBeforeAfter} onCheckedChange={setShowStockBeforeAfter} />
               </div>
+              {receiptData.receiptType === 'debt_payment' && receiptData.debtMovementEntries?.length ? (
+                <>
+                  <div className="h-px bg-border" />
+                  <div className="text-xs font-semibold text-muted-foreground">خيارات وصل حركة الدين</div>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">إظهار إجمالي الدين</Label>
+                    <Switch checked={showDebtTotalSummary} onCheckedChange={setShowDebtTotalSummary} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">إظهار المبلغ المدفوع سابقاً</Label>
+                    <Switch checked={showDebtPaidSummary} onCheckedChange={setShowDebtPaidSummary} />
+                  </div>
+                </>
+              ) : null}
             </CollapsibleContent>
           </Collapsible>
 

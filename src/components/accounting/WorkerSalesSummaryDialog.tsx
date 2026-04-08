@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import AdaptiveScrollContainer from '@/components/ui/adaptive-scroll-container';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -133,7 +134,11 @@ const ExpandedCarousel: React.FC<{
           {item.customers.length > 0 && (
             <>
               <div className="absolute inset-0 bg-background/40 backdrop-blur-[2px]" />
-              <div className="absolute inset-0 z-10 p-3 overflow-y-auto space-y-1.5">
+              <AdaptiveScrollContainer
+                className="absolute inset-0 z-10"
+                maxHeightClassName="absolute inset-0"
+                contentClassName="p-3 space-y-1.5"
+              >
                 {item.customers.map((c) => (
                   <div
                     key={c.customerId}
@@ -162,7 +167,7 @@ const ExpandedCarousel: React.FC<{
                     </div>
                   </div>
                 ))}
-              </div>
+              </AdaptiveScrollContainer>
             </>
           )}
         </div>

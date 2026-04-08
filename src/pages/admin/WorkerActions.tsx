@@ -42,7 +42,6 @@ import WorkerSalesSummaryDialog from '@/components/accounting/WorkerSalesSummary
 import WorkerOrdersSummaryDialog from '@/components/accounting/WorkerOrdersSummaryDialog';
 import WorkerGiftsSummaryDialog from '@/components/accounting/WorkerGiftsSummaryDialog';
 import EditWorkerProfileDialog from '@/components/workers/EditWorkerProfileDialog';
-import WorkerAchievementsDialog from '@/components/workers/WorkerAchievementsDialog';
 import SectorScheduleDialog from '@/components/sectors/SectorScheduleDialog';
 import SectorCoverageDialog from '@/components/sectors/SectorCoverageDialog';
 import ExchangeSessionDialog from '@/components/stock/ExchangeSessionDialog';
@@ -98,7 +97,6 @@ const WorkerActions: React.FC = () => {
   const [salesSummaryOpen, setSalesSummaryOpen] = useState(false);
   const [giftsSummaryOpen, setGiftsSummaryOpen] = useState(false);
   const [workerProfileOpen, setWorkerProfileOpen] = useState(false);
-  const [achievementsOpen, setAchievementsOpen] = useState(false);
   const [sectorScheduleOpen, setSectorScheduleOpen] = useState(false);
   const [sectorScheduleType, setSectorScheduleType] = useState<'delivery' | 'sales'>('delivery');
   const [ordersSummaryOpen, setOrdersSummaryOpen] = useState(false);
@@ -486,7 +484,7 @@ const WorkerActions: React.FC = () => {
       } else if (action.key === 'worker_profile') {
         setWorkerProfileOpen(true);
       } else if (action.key === 'achievements') {
-        setAchievementsOpen(true);
+        navigate(`/my-achievements?worker=${selectedWorker.id}&name=${encodeURIComponent(selectedWorker.full_name)}`);
       } else if (action.key === 'sector_schedule') {
         setSectorScheduleType('delivery');
         setSectorScheduleOpen(true);
@@ -732,12 +730,6 @@ const WorkerActions: React.FC = () => {
       <EditWorkerProfileDialog
         open={workerProfileOpen}
         onOpenChange={setWorkerProfileOpen}
-        workerId={selectedWorker?.id}
-        workerName={selectedWorker?.full_name}
-      />
-      <WorkerAchievementsDialog
-        open={achievementsOpen}
-        onOpenChange={setAchievementsOpen}
         workerId={selectedWorker?.id}
         workerName={selectedWorker?.full_name}
       />

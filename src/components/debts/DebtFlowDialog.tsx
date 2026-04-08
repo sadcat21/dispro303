@@ -1,5 +1,5 @@
 import React from 'react';
-import DebtDetailsDialog from './DebtDetailsDialog';
+import CollectCustomerDebtDialog from './CollectCustomerDebtDialog';
 import CollectDebtDialog from './CollectDebtDialog';
 import VisitNoPaymentDialog from './VisitNoPaymentDialog';
 import CollectedDebtOperationDialog, { TodayDebtCollectionOperation } from './CollectedDebtOperationDialog';
@@ -17,6 +17,7 @@ interface DebtFlowDialogProps {
   customerName?: string;
   customerId?: string;
   collection?: TodayDebtCollectionOperation | null;
+  initialTab?: 'collect' | 'visit' | 'history';
 }
 
 const resolveCustomerName = (debt?: CustomerDebtWithDetails | DueDebt | null, fallback?: string) => {
@@ -33,6 +34,7 @@ const DebtFlowDialog: React.FC<DebtFlowDialogProps> = ({
   customerName,
   customerId,
   collection,
+  initialTab,
 }) => {
   if (mode === 'details') {
     const list = debts ?? (debt ? [debt as CustomerDebtWithDetails] : []);
@@ -40,12 +42,14 @@ const DebtFlowDialog: React.FC<DebtFlowDialogProps> = ({
     const id = customerId || debt?.customer_id;
     if (!list || list.length === 0) return null;
     return (
-      <DebtDetailsDialog
+      <CollectCustomerDebtDialog
         open={open}
         onOpenChange={onOpenChange}
         debts={list as CustomerDebtWithDetails[]}
         customerName={name}
         customerId={id}
+        initialTab={initialTab}
+        customerPhone={(list[0] as CustomerDebtWithDetails | undefined)?.customer?.phone || null}
       />
     );
   }

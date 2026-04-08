@@ -79,9 +79,6 @@ const CollectDebtDialog: React.FC<CollectDebtDialogProps> = ({
   const isPartial = numAmount > 0 && numAmount < remainingAmount;
   const isFullPayment = numAmount > 0 && numAmount >= remainingAmount;
   const liveRemaining = Math.max(0, remainingAmount - numAmount);
-  // Next due date is mandatory when partial payment or visit without collection
-  const needsNextDate = isPartial;
-
   const scheduleLabel = collectionType === 'daily'
     ? t('debts.schedule_type_daily')
     : collectionType === 'weekly' && collectionDays?.length
@@ -108,12 +105,6 @@ const CollectDebtDialog: React.FC<CollectDebtDialogProps> = ({
       toast.error(`المبلغ أكبر من المتبقي (${remainingAmount})`);
       return;
     }
-    // Require next due date for partial payment
-    if (isPartial && !nextDueDate) {
-      toast.error('يجب تحديد موعد التحصيل القادم');
-      return;
-    }
-
     try {
       await updatePayment.mutateAsync({
         debtId,

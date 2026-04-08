@@ -419,6 +419,7 @@ const WorkerHome: React.FC = () => {
           if (!isTodayCustomersHidden) {
             quickActions.push({ key: 'today-customers', icon: <MapPin className="w-6 h-6" />, label: todayCustomersLabel, onClick: () => setShowTodayCustomers(true) });
           }
+          quickActions.push({ key: 'my-achievements', icon: <CalendarCheck className="w-6 h-6" />, label: 'منجزات اليوم', onClick: () => navigate('/my-achievements') });
           // Rewards page
           if (!isRewardsHidden && !isRewardsPageHidden) {
             quickActions.push({ key: 'rewards', icon: <Trophy className="w-6 h-6" />, label: t('worker.rewards'), onClick: () => navigate('/my-rewards') });
@@ -441,6 +442,7 @@ const WorkerHome: React.FC = () => {
             customers: { bg: 'bg-cyan-50', icon: 'text-cyan-600', border: 'border-cyan-200' },
             expenses: { bg: 'bg-yellow-50', icon: 'text-yellow-600', border: 'border-yellow-200' },
             'today-customers': { bg: 'bg-sky-50', icon: 'text-sky-600', border: 'border-sky-200' },
+            'my-achievements': { bg: 'bg-violet-50', icon: 'text-violet-600', border: 'border-violet-200' },
             rewards: { bg: 'bg-amber-50', icon: 'text-amber-600', border: 'border-amber-200' },
             'worker-actions': { bg: 'bg-indigo-50', icon: 'text-indigo-600', border: 'border-indigo-200' },
             'stock-management': { bg: 'bg-teal-50', icon: 'text-teal-600', border: 'border-teal-200' },

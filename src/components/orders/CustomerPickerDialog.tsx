@@ -15,6 +15,8 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { cn } from '@/lib/utils';
+import ClientTrustBadge from '@/components/customers/ClientTrustBadge';
+import { computeClientTrustScoreFromHistory } from '@/utils/clientTrustScore';
 
 interface CustomerPickerDialogProps {
   open: boolean;
@@ -83,6 +85,51 @@ const CustomerPickerDialog: React.FC<CustomerPickerDialogProps> = ({
         }
       });
       return map;
+    },
+    enabled: open,
+  });
+
+  const { data: customerTrustMap } = useQuery({
+    queryKey: ['customer-trust-summary-all'],
+    queryFn: async () => {
+      const { data: allDebts, error: debtsError } = await supabase
+        .from('customer_debts')
+        .select('id, customer_id, total_amount, paid_amount');
+      if (debtsError) throw debtsError;
+
+      const debtIds = (allDebts || []).map((debt) => debt.id);
+      if (!debtIds.length) return {};
+
+      const { data: collections, error: collectionsError } = await supabase
+        .from('debt_collections')
+        .select('debt_id, amount, created_at')
+        .in('debt_id', debtIds);
+      if (collectionsError) throw collectionsError;
+
+      const debtsByCustomer = (allDebts || []).reduce<Record<string, any[]>>((acc, debt) => {
+        if (!debt.customer_id) return acc;
+        if (!acc[debt.customer_id]) acc[debt.customer_id] = [];
+        acc[debt.customer_id].push(debt);
+        return acc;
+      }, {});
+
+      const debtToCustomer = new Map((allDebts || []).map((debt) => [debt.id, debt.customer_id]));
+      const collectionsByCustomer = (collections || []).reduce<Record<string, any[]>>((acc, item) => {
+        const customerId = item.debt_id ? debtToCustomer.get(item.debt_id) : null;
+        if (!customerId) return acc;
+        if (!acc[customerId]) acc[customerId] = [];
+        acc[customerId].push(item);
+        return acc;
+      }, {});
+
+      const result: Record<string, ReturnType<typeof computeClientTrustScoreFromHistory>> = {};
+      Object.keys(debtsByCustomer).forEach((customerId) => {
+        result[customerId] = computeClientTrustScoreFromHistory(
+          debtsByCustomer[customerId],
+          collectionsByCustomer[customerId] || [],
+        );
+      });
+      return result;
     },
     enabled: open,
   });
@@ -264,6 +311,7 @@ const CustomerPickerDialog: React.FC<CustomerPickerDialogProps> = ({
                           const isSelected = selectedCustomerId === customer.id;
                           const subtitle = [customer.store_name, customer.phone].filter(Boolean).join(' • ');
                           const debtInfo = customerDebtsMap?.[customer.id];
+                          const trustInfo = customerTrustMap?.[customer.id];
                           return (
                             <button
                               key={customer.id}
@@ -292,6 +340,11 @@ const CustomerPickerDialog: React.FC<CustomerPickerDialogProps> = ({
                                   showAvatar={false}
                                   showMeta={false}
                                 />
+                                {trustInfo ? (
+                                  <div className="mt-1">
+                                    <ClientTrustBadge trust={trustInfo} compact />
+                                  </div>
+                                ) : null}
                                 {debtInfo && debtInfo.total > 0 && (
                                   <div className="flex items-center gap-1 mt-0.5">
                                     <Badge variant="destructive" className="text-[10px] px-1.5 py-0 h-4 gap-0.5">

@@ -208,6 +208,18 @@ export interface ReceiptData {
   companyLogoUrl?: string;
   receiptTitleOverride?: string;
   hidePaymentDetails?: boolean;
+  showDebtTotalSummary?: boolean;
+  showDebtPaidSummary?: boolean;
+  debtMovementEntries?: Array<{
+    kind: 'debt' | 'partial' | 'full' | 'visit';
+    date: string;
+    workerName?: string | null;
+    paymentMethod?: string | null;
+    beforeAmount?: number | null;
+    afterAmount?: number | null;
+    amount: number;
+    note?: string | null;
+  }>;
 }
 
 export interface AdvancedReceiptOptions {
@@ -317,8 +329,8 @@ export function formatReceiptForPrint(data: ReceiptData): Uint8Array {
   if (data.receiptType === 'debt_payment') {
     add(ALIGN_CENTER);
     add(BOLD_ON);
-    if (data.debtTotalAmount != null) addText(`DETTE TOTALE  : ${formatAmount(data.debtTotalAmount)} DA`);
-    if (data.debtPaidBefore != null) addText(`DEJA PAYE     : ${formatAmount(data.debtPaidBefore)} DA`);
+    if (data.showDebtTotalSummary !== false && data.debtTotalAmount != null) addText(`DETTE TOTALE  : ${formatAmount(data.debtTotalAmount)} DA`);
+    if (data.showDebtPaidSummary !== false && data.debtPaidBefore != null) addText(`DEJA PAYE     : ${formatAmount(data.debtPaidBefore)} DA`);
     addText(separator());
     addText(`PAIEMENT      : ${formatAmount(data.paidAmount)} DA`);
     addText(separator());
@@ -333,6 +345,30 @@ export function formatReceiptForPrint(data: ReceiptData): Uint8Array {
     if (data.nextCollectionDate) {
       addText(separator());
       addText(`PROCHAIN RDV: ${data.nextCollectionDate}${data.nextCollectionTime ? ' ' + data.nextCollectionTime : ''}`);
+    }
+    if (data.debtMovementEntries?.length) {
+      addText(doubleSeparator());
+      data.debtMovementEntries.forEach((entry, index) => {
+        const title =
+          entry.kind === 'debt'
+            ? 'DETTE'
+            : 'PAIEM.';
+        const method =
+          entry.kind === 'debt'
+            ? 'DET'
+            : ({
+                cash: 'ESP',
+                check: 'CHQ',
+                transfer: 'VIR',
+                receipt: 'V-DOC',
+                versement_doc: 'V-DOC',
+                versement_cash: 'V-CASH',
+                virement: 'VIR',
+              }[String(entry.paymentMethod || '').toLowerCase()] || String(entry.paymentMethod || 'PAY').toUpperCase());
+        addText(`${entry.date} ${title} ${formatAmount(entry.amount)} DA`);
+        addText(`Nvl.dette: ${typeof entry.afterAmount === 'number' ? formatAmount(entry.afterAmount) : '-'} DA  ${method} ${entry.workerName || '-'}`);
+        addText(separator('.'));
+      });
     }
   } else {
     // ═══════ ITEMS TABLE ═══════
@@ -673,6 +709,42 @@ export function formatReceiptForPreview(data: ReceiptData): string {
   // ── Debt payment ──
   if (data.receiptType === 'debt_payment') {
     const methodLabels: Record<string, string> = { cash: 'Espèces', check: 'Chèque', transfer: 'Virement', receipt: 'Versement' };
+    const debtMovementsHtml = data.debtMovementEntries?.filter((entry) => entry.kind !== 'visit').length
+      ? `
+        <div style="border-top:1px dashed #000;margin-top:6px;padding-top:6px;direction:ltr;text-align:left;color:#000;">
+          ${data.debtMovementEntries.filter((entry) => entry.kind !== 'visit').map((entry) => {
+            const title =
+              entry.kind === 'debt'
+                ? 'DETTE'
+                : 'PAIEM.';
+            const method =
+              entry.kind === 'debt'
+                ? 'DET.'
+                : ({
+                    cash: 'ESP',
+                    check: 'CHQ',
+                    transfer: 'VIR',
+                    receipt: 'V-DOC',
+                    versement_doc: 'V-DOC',
+                    versement_cash: 'V-CASH',
+                    virement: 'VIR',
+                  }[String(entry.paymentMethod || '').toLowerCase()] || String(entry.paymentMethod || 'PAY').toUpperCase());
+            return `
+              <div style="border-top:1px solid #000;border-bottom:1px dashed #999;padding:3px 0 4px;margin-bottom:4px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;font-weight:bold;font-size:9px;color:#000;white-space:nowrap;">
+                  <span>${entry.date}</span>
+                  <span style="white-space:nowrap;">${title} ${formatAmount(entry.amount)} DA</span>
+                </div>
+                <div style="display:flex;justify-content:space-between;gap:6px;font-size:7px;color:#000;margin-top:2px;">
+                  <span style="white-space:nowrap;">Nvl. dette: ${typeof entry.afterAmount === 'number' ? formatAmount(entry.afterAmount) : '-'} DA</span>
+                  <span style="white-space:nowrap;">${method} ${entry.workerName || '-'}</span>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `
+      : '';
     return `
       <div style="font-family:'Courier New',monospace;max-width:200px;margin:0 auto;font-size:10px;line-height:1.3;color:#1a1a1a;">
         <!-- Header -->
@@ -690,14 +762,15 @@ export function formatReceiptForPreview(data: ReceiptData): string {
           ${data.customerPhone ? `<div>Tel: ${data.customerPhone}</div>` : ''}
         </div>
         <div style="text-align:center;font-weight:bold;padding:6px 0;">
-          ${data.debtTotalAmount != null ? `<div>DETTE TOTALE: ${formatAmount(data.debtTotalAmount)} DA</div>` : ''}
-          ${data.debtPaidBefore != null ? `<div>DÉJÀ PAYÉ: ${formatAmount(data.debtPaidBefore)} DA</div>` : ''}
-          <div style="border-top:1px dashed #000;margin:4px 0;padding-top:4px;color:#16a34a;font-size:13px;">PAIEMENT: ${formatAmount(data.paidAmount)} DA</div>
+          ${data.showDebtTotalSummary !== false && data.debtTotalAmount != null ? `<div>DETTE TOTALE: ${formatAmount(data.debtTotalAmount)} DA</div>` : ''}
+          ${data.showDebtPaidSummary !== false && data.debtPaidBefore != null ? `<div>DÉJÀ PAYÉ: ${formatAmount(data.debtPaidBefore)} DA</div>` : ''}
+          ${!data.hidePaymentDetails ? `<div style="border-top:1px dashed #000;margin:4px 0;padding-top:4px;color:#16a34a;font-size:13px;">PAIEMENT: ${formatAmount(data.paidAmount)} DA</div>` : ''}
           <div style="border-top:1px dashed #000;margin:4px 0;padding-top:4px;color:#dc2626;font-size:13px;">RESTANT: ${formatAmount(data.remainingAmount)} DA</div>
         </div>
         ${data.collectorName ? `<div style="text-align:center;">Collecteur: ${data.collectorName}</div>` : ''}
         ${data.paymentMethod ? `<div style="text-align:center;">Mode: ${methodLabels[data.paymentMethod] || data.paymentMethod}</div>` : ''}
         ${data.nextCollectionDate ? `<div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;text-align:center;font-weight:bold;">PROCHAIN RDV: ${data.nextCollectionDate}${data.nextCollectionTime ? ' ' + data.nextCollectionTime : ''}</div>` : ''}
+        ${debtMovementsHtml}
         ${data.notes ? `<div style="border-top:1px dashed #000;margin-top:4px;padding-top:4px;">Note: ${data.notes}</div>` : ''}
         ${advancedHtml}
         ${data.advancedOptions?.showSignatures ? `
