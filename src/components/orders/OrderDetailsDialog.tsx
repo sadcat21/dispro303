@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { format } from 'date-fns';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import CustomerSummary from '@/components/customers/CustomerSummary';
 import ReceiptDialog from '@/components/printing/ReceiptDialog';
 import ModifyOrderDialog from '@/components/orders/ModifyOrderDialog';
@@ -77,6 +78,24 @@ const resolveOrderPayment = (
   return { paidAmount: totalAmount, remainingAmount: 0 };
 };
 
+const getPaymentMethodLabel = (order: any) => {
+  const paymentType = order?.payment_type;
+  if (paymentType === 'with_invoice') {
+    const method = order?.invoice_payment_method;
+    if (method === 'cash') return 'كاش';
+    if (method === 'check') return 'شيك';
+    if (method === 'transfer') return 'Virement';
+    if (method === 'receipt') return 'Versement Doc';
+    return 'فاتورة';
+  }
+  if (paymentType === 'without_invoice') return 'بدون فاتورة';
+  if (paymentType === 'cash') return 'كاش';
+  if (paymentType === 'check') return 'شيك';
+  if (paymentType === 'transfer') return 'Virement';
+  if (paymentType === 'receipt') return 'Versement Doc';
+  return 'كاش';
+};
+
 const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenChange, order }) => {
   const { dir } = useLanguage();
   const { user } = useAuth();
@@ -97,7 +116,7 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
       if (error) throw error;
       return data;
     },
-    enabled: open && !!order?.id && order?.status === 'delivered',
+    enabled: open && !!order?.id,
   });
 
   const displayItems = useMemo(() => {
@@ -138,6 +157,15 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
   const remainingAmount = orderDebt
     ? Number(orderDebt.remaining_amount || 0)
     : fallback.remainingAmount;
+  const paymentStatus = String(order?.payment_status || '').toLowerCase();
+  const hasDebt =
+    remainingAmount > 0 ||
+    Number(orderDebt?.total_amount || 0) > 0 ||
+    ['pending', 'payment_pending', 'no_payment', 'credit', 'partial', 'payment_partial'].includes(paymentStatus);
+  const paymentMethodLabel = getPaymentMethodLabel(order);
+  const debtTagLabel = remainingAmount > 0
+    ? (paidAmount > 0 ? 'دين جزئي' : 'دين كلي')
+    : null;
 
   const receiptData = {
     receiptType: 'delivery' as const,
@@ -264,8 +292,23 @@ const OrderDetailsDialog: React.FC<OrderDetailsDialogProps> = ({ open, onOpenCha
               <span className="text-lg font-bold text-primary">{Number(effectiveTotalAmount || 0).toLocaleString()} DA</span>
             </div>
 
-            {remainingAmount > 0 && (
+            <div className="space-y-1.5 rounded-lg bg-muted/30 p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-muted-foreground">طريقة الدفع</span>
+                <span className="font-bold">{paymentMethodLabel}</span>
+              </div>
+            </div>
+
+            {hasDebt && (
               <div className="space-y-1.5 rounded-lg bg-muted/30 p-3">
+                {debtTagLabel && (
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">حالة الدين</span>
+                    <Badge variant="destructive" className="text-[10px] px-2 py-0.5">
+                      {debtTagLabel}
+                    </Badge>
+                  </div>
+                )}
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-muted-foreground">المبلغ المدفوع</span>
                   <span className="font-bold text-emerald-600">{paidAmount.toLocaleString()} DA</span>

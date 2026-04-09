@@ -323,6 +323,12 @@ const CollectedDebtOperationDialog: React.FC<Props> = ({ open, onOpenChange, col
                   {Number(collection.amount_collected || 0).toLocaleString()} DA
                 </div>
               </div>
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span className="truncate">المحل</span>
+                <span className="font-semibold text-foreground truncate">
+                  {customer?.store_name || customer?.name || '—'}
+                </span>
+              </div>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span className="inline-flex items-center gap-1">
                   <CalendarClock className="w-3.5 h-3.5" />

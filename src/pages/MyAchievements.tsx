@@ -5,19 +5,22 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSearchParams } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import AdaptiveScrollContainer from '@/components/ui/adaptive-scroll-container';
-import { Loader2, MapPin, ShoppingCart, Truck, Package, UserPlus, Edit2, Banknote, Eye, CalendarCheck, ClipboardList, BarChart3, ArrowRight } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Loader2, MapPin, ShoppingCart, Truck, Package, UserPlus, Edit2, Banknote, Eye, CalendarCheck, ClipboardList } from 'lucide-react';
 import { getOperationLabel, type OperationType } from '@/hooks/useVisitTracking';
 import OrderDetailsDialog from '@/components/orders/OrderDetailsDialog';
+import CollectedDebtOperationDialog, { TodayDebtCollectionOperation } from '@/components/debts/CollectedDebtOperationDialog';
 import WorkerHandoverPreviewDialog from '@/components/accounting/WorkerHandoverPreviewDialog';
 import WorkerSalesSummaryDialog from '@/components/accounting/WorkerSalesSummaryDialog';
 import WorkerOrdersSummaryDialog from '@/components/accounting/WorkerOrdersSummaryDialog';
 import type { OrderWithDetails } from '@/types/database';
+import { isAdminRole } from '@/lib/utils';
 
 const OPERATION_ICONS: Record<string, React.ReactNode> = {
   order: <ShoppingCart className="w-4 h-4 text-blue-600" />,
@@ -186,29 +189,62 @@ const DebtAggregatesDialog: React.FC<{
 };
 
 const MyAchievements: React.FC = () => {
-  const { workerId, user } = useAuth();
+  const { workerId, user, role, activeBranch } = useAuth();
   const [searchParams] = useSearchParams();
   const today = format(new Date(), 'yyyy-MM-dd');
-  const targetWorkerId = searchParams.get('worker') || workerId;
-  const targetWorkerName = searchParams.get('name') || user?.full_name;
+  const isAdmin = isAdminRole(role);
+  const searchWorker = searchParams.get('worker');
+  const searchName = searchParams.get('name');
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string>(() => searchWorker || workerId || '');
+  const [periodFrom, setPeriodFrom] = useState<string>(() => searchParams.get('from') || today);
+  const [periodTo, setPeriodTo] = useState<string>(() => searchParams.get('to') || today);
+  const [showPeriodDialog, setShowPeriodDialog] = useState(false);
+
+  const normalizeRange = (from: string, to: string) => {
+    const start = new Date(`${from || today}T00:00:00`);
+    const end = new Date(`${(to || from || today)}T23:59:59`);
+    if (start > end) return { start: end, end: start };
+    return { start, end };
+  };
+
+  const { start, end } = normalizeRange(periodFrom, periodTo);
+  const dateFrom = format(start, 'yyyy-MM-dd');
+  const dateTo = format(end, 'yyyy-MM-dd');
+
+  const { data: workersList = [] } = useQuery({
+    queryKey: ['achievements-workers', activeBranch?.id, isAdmin],
+    queryFn: async () => {
+      if (!isAdmin) return [];
+      let query = supabase.from('workers_safe').select('id, full_name, branch_id');
+      if (activeBranch?.id) query = query.eq('branch_id', activeBranch.id);
+      const { data } = await query.order('full_name');
+      return data || [];
+    },
+    enabled: isAdmin,
+  });
+
+  const targetWorkerId = isAdmin ? selectedWorkerId : (workerId || '');
+  const targetWorkerName = isAdmin
+    ? (workersList.find((w: any) => w.id === selectedWorkerId)?.full_name || searchName || user?.full_name)
+    : (searchName || user?.full_name);
   const [activeFilter, setActiveFilter] = useState<string | null>(null);
-  const [selectedVisit, setSelectedVisit] = useState<any | null>(null);
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<OrderWithDetails | null>(null);
+  const [selectedDebtCollection, setSelectedDebtCollection] = useState<TodayDebtCollectionOperation | null>(null);
   const [showHandoverSummary, setShowHandoverSummary] = useState(false);
   const [showSalesSummary, setShowSalesSummary] = useState(false);
   const [showOrdersSummary, setShowOrdersSummary] = useState(false);
   const [showDebtAggregates, setShowDebtAggregates] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['my-achievements-page', targetWorkerId, today],
+    queryKey: ['my-achievements-page', targetWorkerId, dateFrom, dateTo],
     queryFn: async () => {
       if (!targetWorkerId) return { visits: [], counts: {} };
       const { data: visits } = await supabase
         .from('visit_tracking')
         .select('*')
         .eq('worker_id', targetWorkerId)
-        .gte('created_at', `${today}T00:00:00`)
-        .lte('created_at', `${today}T23:59:59`)
+        .gte('created_at', `${dateFrom}T00:00:00`)
+        .lte('created_at', `${dateTo}T23:59:59`)
         .order('created_at', { ascending: false });
 
       const customerIds = [...new Set((visits || []).filter((v) => v.customer_id).map((v) => v.customer_id!))];
@@ -220,9 +256,92 @@ const MyAchievements: React.FC = () => {
         }
       }
 
+      const orderLinkedTypes = new Set<OperationType>(['order', 'direct_sale', 'delivery']);
+      const debtCollectionDebtIds = [...new Set(
+        (visits || [])
+          .filter(v => v.operation_type === 'debt_collection')
+          .map(v => v.operation_id || v.entity_id || v.reference_id)
+          .filter(Boolean) as string[]
+      )];
+      const orderIds = [...new Set(
+        (visits || [])
+          .filter(v => orderLinkedTypes.has(v.operation_type as OperationType))
+          .map(v => v.operation_id)
+          .filter(Boolean) as string[]
+      )];
+
+      const debtOrderIds = new Set<string>();
+      const debtStatusMap = new Map<string, 'partial' | 'full'>();
+      const debtMoneyMap = new Map<string, { paidAmount: number; remainingAmount: number; totalAmount: number }>();
+      const orderTotalMap = new Map<string, number>();
+      const debtCollectionStoreMap = new Map<string, string>();
+      const debtCollectionAmountMap = new Map<string, number>();
+      if (orderIds.length) {
+        const { data: orders } = await supabase
+          .from('orders')
+          .select('id, total_amount')
+          .in('id', orderIds);
+        (orders || []).forEach((o: any) => {
+          if (!o.id) return;
+          orderTotalMap.set(o.id, Number(o.total_amount || 0));
+        });
+
+        const { data: debts } = await supabase
+          .from('customer_debts')
+          .select('order_id, remaining_amount, paid_amount, total_amount')
+          .in('order_id', orderIds)
+          .gt('remaining_amount', 0);
+        (debts || []).forEach((d: any) => {
+          if (!d.order_id) return;
+          debtOrderIds.add(d.order_id);
+          const paidAmount = Number(d.paid_amount || 0);
+          const remaining = Number(d.remaining_amount || 0);
+          const totalAmount = Number(d.total_amount || 0);
+          if (remaining > 0) {
+            debtStatusMap.set(d.order_id, paidAmount > 0 ? 'partial' : 'full');
+            debtMoneyMap.set(d.order_id, { paidAmount, remainingAmount: remaining, totalAmount });
+          }
+        });
+      }
+
+      if (debtCollectionDebtIds.length) {
+        const { data: debtCollections } = await supabase
+          .from('debt_collections')
+          .select(`
+            debt_id,
+            amount_collected,
+            created_at,
+            debt:customer_debts!debt_collections_debt_id_fkey(
+              customer:customers(id, name, store_name)
+            )
+          `)
+          .in('debt_id', debtCollectionDebtIds)
+          .order('created_at', { ascending: false });
+
+        (debtCollections || []).forEach((collection: any) => {
+          const storeName = collection?.debt?.customer?.store_name || collection?.debt?.customer?.name || '';
+          if (collection?.debt_id && storeName) {
+            debtCollectionStoreMap.set(collection.debt_id, storeName);
+          }
+          if (collection?.debt_id && !debtCollectionAmountMap.has(collection.debt_id)) {
+            debtCollectionAmountMap.set(collection.debt_id, Number(collection.amount_collected || 0));
+          }
+        });
+      }
+
       const enrichedVisits = (visits || []).map((visit) => ({
         ...visit,
         customer_name: visit.customer_id ? customerMap.get(visit.customer_id) || '' : '',
+        isDebtSale: visit.operation_id ? debtOrderIds.has(visit.operation_id) : false,
+        debtStatus: visit.operation_id ? debtStatusMap.get(visit.operation_id) || null : null,
+        debtMoney: visit.operation_id ? debtMoneyMap.get(visit.operation_id) || null : null,
+        orderTotal: visit.operation_id ? orderTotalMap.get(visit.operation_id) || null : null,
+        debtCollectionAmount: visit.operation_type === 'debt_collection'
+          ? debtCollectionAmountMap.get(visit.operation_id || visit.entity_id || visit.reference_id || '') || null
+          : null,
+        debtCollectionStoreName: visit.operation_type === 'debt_collection'
+          ? debtCollectionStoreMap.get(visit.operation_id || visit.entity_id || visit.reference_id || '') || ''
+          : '',
       }));
 
       const counts: Record<string, number> = {};
@@ -234,98 +353,256 @@ const MyAchievements: React.FC = () => {
 
   const visits = data?.visits || [];
   const counts = data?.counts || {};
+  const isDebtNewAchievement = (visit: any) =>
+    !!visit.isDebtSale || !!visit.debtStatus;
+
   const filteredVisits = useMemo(() => {
     if (!activeFilter) return visits;
+    if (activeFilter === 'debt_new') return visits.filter((visit: any) => isDebtNewAchievement(visit));
     return visits.filter((visit: any) => visit.operation_type === activeFilter);
   }, [visits, activeFilter]);
 
+  const debtNewCount = useMemo(() => visits.filter((visit: any) => isDebtNewAchievement(visit)).length, [visits]);
+
   const handleOpenAchievement = async (visit: any) => {
-    const orderLikeTypes = ['order', 'direct_sale', 'delivery'];
-    const entityId = visit.entity_id || visit.order_id || visit.reference_id;
-    if (!orderLikeTypes.includes(visit.operation_type) || !entityId) {
-      setSelectedVisit(visit);
-      return;
+    if (visit.operation_type === 'debt_collection') {
+      const debtId = visit.operation_id || visit.entity_id || visit.reference_id;
+      if (debtId) {
+        const visitTime = new Date(visit.created_at).getTime();
+        const startWindow = new Date(visitTime - 12 * 60 * 60 * 1000).toISOString();
+        const endWindow = new Date(visitTime + 12 * 60 * 60 * 1000).toISOString();
+        let query = supabase
+          .from('debt_collections')
+          .select(`
+            id, debt_id, worker_id, collection_date, action, amount_collected, payment_method, next_due_date, status, notes, created_at,
+            worker:workers!debt_collections_worker_id_fkey(id, full_name, username),
+            debt:customer_debts!debt_collections_debt_id_fkey(
+              id, customer_id, total_amount, paid_amount, remaining_amount,
+              customer:customers(id, name, store_name, phone, customer_type)
+            )
+          `)
+          .eq('debt_id', debtId)
+          .gte('created_at', startWindow)
+          .lte('created_at', endWindow)
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (visit.worker_id) query = query.eq('worker_id', visit.worker_id);
+        const { data } = await query;
+        if (data && data.length) {
+          setSelectedDebtCollection(data[0] as TodayDebtCollectionOperation);
+          return;
+        }
+      }
     }
 
-    const { data } = await supabase
-      .from('orders')
-      .select(`*, customer:customers(*), worker:workers(*)`)
-      .eq('id', entityId)
-      .single();
+    const orderLinkedTypes = new Set<OperationType>(['order', 'direct_sale', 'delivery']);
+    const entityId = visit.operation_id || visit.entity_id || visit.order_id || visit.reference_id;
 
-    if (data) {
-      setSelectedOrderDetails(data as OrderWithDetails);
-      return;
+    const buildFallbackOrder = async () => {
+      let customer: any = null;
+      if (visit.customer_id) {
+        const { data: customerData } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('id', visit.customer_id)
+          .maybeSingle();
+        customer = customerData || null;
+      }
+
+      const pseudoOrder: any = {
+        id: entityId || visit.id,
+        created_at: visit.created_at,
+        total_amount: 0,
+        payment_type: 'cash',
+        invoice_payment_method: null,
+        status: 'delivered',
+        payment_status: 'paid',
+        notes: visit.notes || null,
+        customer_name: visit.customer_name,
+        customer,
+        items: [],
+        _isDirectSale: visit.operation_type === 'direct_sale',
+      };
+
+      setSelectedOrderDetails(pseudoOrder as OrderWithDetails);
+    };
+
+    if (orderLinkedTypes.has(visit.operation_type as OperationType)) {
+      const fetchOrderWithItems = async (orderId: string) => {
+        const { data: order } = await supabase
+          .from('orders')
+          .select(`*, customer:customers(*), worker:workers(*)`)
+          .eq('id', orderId)
+          .single();
+        if (!order) return null;
+        const { data: items } = await supabase
+          .from('order_items')
+          .select('id, quantity, unit_price, total_price, gift_quantity, product:products(id, name, image_url)')
+          .eq('order_id', orderId);
+        return { ...(order as any), items: items || [] } as OrderWithDetails;
+      };
+
+      if (entityId) {
+        const order = await fetchOrderWithItems(entityId);
+        if (order) {
+            setSelectedOrderDetails(order);
+            return;
+          }
+        }
+
+      if (visit.customer_id) {
+        const visitTime = new Date(visit.created_at).getTime();
+        const startWindow = new Date(visitTime - 12 * 60 * 60 * 1000).toISOString();
+        const endWindow = new Date(visitTime + 12 * 60 * 60 * 1000).toISOString();
+        let fallbackQuery = supabase
+          .from('orders')
+          .select(`*, customer:customers(*), worker:workers(*)`)
+          .eq('customer_id', visit.customer_id)
+          .gte('created_at', startWindow)
+          .lte('created_at', endWindow)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        if (visit.worker_id) {
+          fallbackQuery = fallbackQuery.or(`created_by.eq.${visit.worker_id},assigned_worker_id.eq.${visit.worker_id}`);
+        }
+
+        const { data: fallbackOrders } = await fallbackQuery;
+        if (fallbackOrders && fallbackOrders.length) {
+          const targetTime = new Date(visit.created_at).getTime();
+          const closest = fallbackOrders.reduce((prev: any, current: any) => {
+            const prevDiff = Math.abs(new Date(prev.created_at).getTime() - targetTime);
+            const currDiff = Math.abs(new Date(current.created_at).getTime() - targetTime);
+            return currDiff < prevDiff ? current : prev;
+          });
+          const hydrated = await fetchOrderWithItems(closest.id);
+          if (hydrated) {
+            setSelectedOrderDetails(hydrated);
+            return;
+          }
+        }
+
+        if (['direct_sale', 'delivery'].includes(visit.operation_type)) {
+          const { data: receipts } = await supabase
+            .from('receipts')
+            .select('*')
+            .eq('customer_id', visit.customer_id)
+            .eq('receipt_type', visit.operation_type === 'direct_sale' ? 'direct_sale' : 'delivery')
+            .gte('created_at', startWindow)
+            .lte('created_at', endWindow)
+            .order('created_at', { ascending: false })
+            .limit(5);
+
+          if (receipts && receipts.length) {
+            const receipt = receipts[0] as any;
+            if (receipt.order_id) {
+              const order = await fetchOrderWithItems(receipt.order_id);
+              if (order) {
+                setSelectedOrderDetails(order);
+                return;
+              }
+            }
+            const pseudoOrder: any = {
+              id: receipt.order_id || receipt.id,
+              created_at: receipt.created_at,
+              total_amount: receipt.total_amount,
+              payment_type: receipt.receipt_type === 'direct_sale' ? 'without_invoice' : 'with_invoice',
+              invoice_payment_method: receipt.payment_method || null,
+              notes: receipt.notes || null,
+              customer_name: receipt.customer_name,
+              customer: {
+                name: receipt.customer_name,
+                store_name: receipt.customer_name,
+                phone: receipt.customer_phone,
+              },
+              items: Array.isArray(receipt.items) ? receipt.items : [],
+              _isDirectSale: receipt.receipt_type === 'direct_sale',
+            };
+            setSelectedOrderDetails(pseudoOrder as OrderWithDetails);
+            return;
+          }
+        }
+      }
     }
-    setSelectedVisit(visit);
+
+    await buildFallbackOrder();
   };
 
   return (
-    <div className="p-4 space-y-4" dir="rtl">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-black">منجزات اليوم</h1>
-          <p className="text-sm text-muted-foreground">{targetWorkerName || 'العامل'}</p>
+    <div className="p-3 sm:p-4 flex h-[100dvh] flex-col gap-3 overflow-hidden" dir="rtl">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <div className="min-w-0">
+          <h1 className="text-xl sm:text-3xl font-black leading-tight">منجزات اليوم</h1>
+          <p className="text-sm text-muted-foreground truncate">{targetWorkerName || 'العامل'}</p>
         </div>
-        <Button variant="outline" className="rounded-full" onClick={() => history.back()}>
-          <ArrowRight className="w-4 h-4 ml-1" />
-          رجوع
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Button className="rounded-2xl" variant="outline" onClick={() => setShowHandoverSummary(true)}>
-          <ClipboardList className="w-4 h-4 ml-1" />
-          ملخص التسليم
-        </Button>
-        <Button className="rounded-2xl" variant="outline" onClick={() => setShowDebtAggregates(true)}>
-          <BarChart3 className="w-4 h-4 ml-1" />
-          التجميعات
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" className="rounded-2xl" onClick={() => setShowSalesSummary(true)}>
-          <Package className="w-4 h-4 ml-1" />
-          تجميع المبيعات
-        </Button>
-        <Button variant="outline" className="rounded-2xl" onClick={() => setShowOrdersSummary(true)}>
-          <ShoppingCart className="w-4 h-4 ml-1" />
-          تجميع الطلبات
-        </Button>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => setActiveFilter(null)}
-          className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold border ${!activeFilter ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/60 text-foreground border-border'}`}
-        >
-          الكل
-          <span>{visits.length}</span>
-        </button>
-        {Object.entries(counts).map(([type, count]) => (
-          <button
-            key={type}
-            onClick={() => setActiveFilter(activeFilter === type ? null : type)}
-            className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-medium border ${activeFilter === type ? 'bg-primary text-primary-foreground border-primary' : OPERATION_COLORS[type] || 'border-border'}`}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <Button
+            className="h-8 rounded-full px-2.5 text-[10px] sm:text-xs whitespace-nowrap"
+            variant="outline"
+            onClick={() => setShowPeriodDialog(true)}
           >
-            {OPERATION_ICONS[type]}
-            <span>{getOperationLabel(type as OperationType)}</span>
-            <span className="font-bold">{count}</span>
-          </button>
-        ))}
+            <CalendarCheck className="w-3 h-3 ml-1" />
+            الرزنامة
+          </Button>
+          <Button
+            className="h-8 rounded-full px-2.5 text-[10px] sm:text-xs whitespace-nowrap"
+            variant="outline"
+            onClick={() => setShowHandoverSummary(true)}
+          >
+            <ClipboardList className="w-3 h-3 ml-1" />
+            ملخص التسليم
+          </Button>
+          <Button
+            variant="outline"
+            className="h-8 rounded-full px-2.5 text-[10px] sm:text-xs whitespace-nowrap"
+            onClick={() => setShowSalesSummary(true)}
+          >
+            <Package className="w-3 h-3 ml-1" />
+            تجميع المبيعات
+          </Button>
+        </div>
       </div>
 
-      <Card className="rounded-2xl">
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">قائمة المنجزات</CardTitle>
+      <Card className="rounded-2xl flex flex-1 flex-col min-h-0 overflow-hidden">
+        <CardHeader className="pb-2 pt-3">
+          <div className="-mx-1 px-1 pb-1">
+            <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center">
+              <button
+                onClick={() => setActiveFilter(null)}
+                className={`inline-flex min-w-0 items-center justify-center gap-1 px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-bold border shrink-0 ${!activeFilter ? 'bg-primary text-primary-foreground border-primary' : 'bg-muted/60 text-foreground border-border'}`}
+              >
+                الكل
+                <span>{visits.length}</span>
+              </button>
+              <button
+                onClick={() => setActiveFilter(activeFilter === 'debt_new' ? null : 'debt_new')}
+                className={`inline-flex min-w-0 items-center justify-center gap-1 px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium border shrink-0 ${activeFilter === 'debt_new' ? 'bg-primary text-primary-foreground border-primary' : 'bg-orange-50 text-orange-700 border-orange-200'}`}
+              >
+                <Banknote className="w-3.5 h-3.5" />
+                <span>دين جديد</span>
+                <span className="font-bold">{debtNewCount}</span>
+              </button>
+              {Object.entries(counts).map(([type, count]) => (
+                <button
+                  key={type}
+                  onClick={() => setActiveFilter(activeFilter === type ? null : type)}
+                  className={`inline-flex min-w-0 items-center justify-center gap-1 px-2 py-1 rounded-full text-[10px] sm:text-[11px] font-medium border shrink-0 ${activeFilter === type ? 'bg-primary text-primary-foreground border-primary' : OPERATION_COLORS[type] || 'border-border'}`}
+                >
+                  <span className="scale-90">{OPERATION_ICONS[type]}</span>
+                  <span>{getOperationLabel(type as OperationType)}</span>
+                  <span className="font-bold">{count}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </CardHeader>
-        <CardContent className="p-3 pt-0">
+        <CardContent className="p-2 pt-0 flex-1 min-h-0">
           {isLoading ? (
             <div className="py-10 flex justify-center"><Loader2 className="w-6 h-6 animate-spin text-muted-foreground" /></div>
           ) : (
             <AdaptiveScrollContainer
-              maxHeightClassName="max-h-[min(62dvh,620px)]"
+              maxHeightClassName="h-full min-h-0"
               contentClassName="space-y-2 pe-1"
             >
               {filteredVisits.map((visit: any) => (
@@ -333,16 +610,59 @@ const MyAchievements: React.FC = () => {
                   key={visit.id}
                   type="button"
                   onClick={() => handleOpenAchievement(visit)}
-                  className={`w-full rounded-2xl border p-3 text-right transition-shadow hover:shadow-sm ${OPERATION_COLORS[visit.operation_type] || 'border-border'}`}
+                  className={`w-full rounded-2xl border p-3 text-right transition-all hover:shadow-sm active:scale-[0.995] ${OPERATION_COLORS[visit.operation_type] || 'border-border'}`}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="mt-1">{OPERATION_ICONS[visit.operation_type] || <MapPin className="w-4 h-4" />}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="font-semibold">{getOperationLabel(visit.operation_type as OperationType)}</div>
-                        <div className="text-[11px] text-muted-foreground" dir="ltr">{format(new Date(visit.created_at), 'dd/MM/yyyy')}</div>
+                    <div className="mt-1 shrink-0 rounded-full bg-background/70 p-1.5 shadow-sm">
+                      {OPERATION_ICONS[visit.operation_type] || <MapPin className="w-4 h-4" />}
+                    </div>
+                    <div className="flex-1 min-w-0 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-semibold leading-5 truncate max-w-[160px]">
+                              {visit.operation_type === 'debt_collection'
+                                ? (visit.debtCollectionStoreName || getOperationLabel(visit.operation_type as OperationType))
+                                : (visit.customer_name || getOperationLabel(visit.operation_type as OperationType))}
+                            </span>
+                            <Badge variant="outline" className="text-[10px] px-2 py-0.5 border-slate-300 text-slate-700 bg-slate-50 shrink-0">
+                              {getOperationLabel(visit.operation_type as OperationType)}
+                            </Badge>
+                            {visit.isDebtSale && (
+                              <Badge
+                                variant={visit.debtStatus === 'partial' ? 'secondary' : 'destructive'}
+                                className={`text-[10px] px-2 py-0.5 shrink-0 ${visit.debtStatus === 'partial' ? 'bg-amber-100 text-amber-700 border border-amber-200' : ''}`}
+                              >
+                                {visit.debtStatus === 'partial' ? 'دين جزئي' : 'دين كلي'}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <div className="shrink-0 text-[11px] text-muted-foreground text-left" dir="ltr">
+                          {format(new Date(visit.created_at), 'dd/MM/yyyy')}
+                        </div>
                       </div>
-                      {visit.customer_name ? <div className="mt-1 text-sm text-muted-foreground truncate">{visit.customer_name}</div> : null}
+                      <div className="space-y-1 text-right">
+                        {visit.orderTotal != null ? (
+                          <div className="text-sm font-semibold text-slate-900" dir="ltr">
+                            {Number(visit.orderTotal).toLocaleString()} DA
+                          </div>
+                        ) : null}
+                        {visit.operation_type === 'debt_collection' && visit.debtCollectionAmount != null ? (
+                          <div className="text-sm font-semibold text-slate-900" dir="ltr">
+                            {Number(visit.debtCollectionAmount).toLocaleString()} DA
+                          </div>
+                        ) : null}
+                        {visit.isDebtSale && visit.debtMoney ? (
+                          <div className="text-[11px] text-muted-foreground" dir="ltr">
+                            {visit.debtStatus === 'partial' ? (
+                              <>كاش {visit.debtMoney.paidAmount.toLocaleString()} DA • دين {visit.debtMoney.remainingAmount.toLocaleString()} DA</>
+                            ) : (
+                              <>دين {visit.debtMoney.remainingAmount.toLocaleString()} DA</>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
                     </div>
                   </div>
                 </button>
@@ -353,9 +673,48 @@ const MyAchievements: React.FC = () => {
         </CardContent>
       </Card>
 
-      <Dialog open={!!selectedVisit} onOpenChange={(open) => !open && setSelectedVisit(null)}>
-        <DialogContent className="max-w-sm max-h-[85vh] overflow-y-auto" dir="rtl">
-          {selectedVisit ? <AchievementDetailContent visit={selectedVisit} onClose={() => setSelectedVisit(null)} /> : null}
+      <Dialog open={showPeriodDialog} onOpenChange={setShowPeriodDialog}>
+        <DialogContent dir="rtl" className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>تحديد الفترة</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-1 gap-2">
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">من</span>
+                <Input
+                  type="date"
+                  value={periodFrom}
+                  onChange={(e) => setPeriodFrom(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </label>
+              <label className="space-y-1">
+                <span className="text-xs text-muted-foreground">إلى</span>
+                <Input
+                  type="date"
+                  value={periodTo}
+                  onChange={(e) => setPeriodTo(e.target.value)}
+                  className="h-9 text-sm"
+                />
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                className="flex-1"
+                variant="outline"
+                onClick={() => {
+                  setPeriodFrom(today);
+                  setPeriodTo(today);
+                }}
+              >
+                إعادة تعيين
+              </Button>
+              <Button className="flex-1" onClick={() => setShowPeriodDialog(false)}>
+                تطبيق
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -367,10 +726,18 @@ const MyAchievements: React.FC = () => {
         order={selectedOrderDetails}
       />
 
+      <CollectedDebtOperationDialog
+        open={!!selectedDebtCollection}
+        onOpenChange={(isOpen) => {
+          if (!isOpen) setSelectedDebtCollection(null);
+        }}
+        collection={selectedDebtCollection}
+      />
+
       <WorkerHandoverPreviewDialog open={showHandoverSummary} onOpenChange={setShowHandoverSummary} />
       <WorkerSalesSummaryDialog open={showSalesSummary} onOpenChange={setShowSalesSummary} workerId={targetWorkerId || undefined} workerName={targetWorkerName || undefined} />
       <WorkerOrdersSummaryDialog open={showOrdersSummary} onOpenChange={setShowOrdersSummary} workerId={targetWorkerId || undefined} workerName={targetWorkerName || undefined} />
-      <DebtAggregatesDialog open={showDebtAggregates} onOpenChange={setShowDebtAggregates} workerId={targetWorkerId || undefined} dateFrom={today} dateTo={today} />
+      <DebtAggregatesDialog open={showDebtAggregates} onOpenChange={setShowDebtAggregates} workerId={targetWorkerId || undefined} dateFrom={dateFrom} dateTo={dateTo} />
     </div>
   );
 };
